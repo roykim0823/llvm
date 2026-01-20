@@ -16,13 +16,16 @@ LLVM_READNONE inline bool isLetter(char c) {
 }
 
 void Lexer::next(Token &token) {
+  // ignore whitespace
   while (*BufferPtr && charinfo::isWhitespace(*BufferPtr)) {
     ++BufferPtr;
   }
+
   if (!*BufferPtr) {
     token.Kind = Token::eoi;
     return;
   }
+
   if (charinfo::isLetter(*BufferPtr)) {
     const char *end = BufferPtr + 1;
     while (charinfo::isLetter(*end))
@@ -46,10 +49,10 @@ CASE('+', Token::plus);
 CASE('-', Token::minus);
 CASE('*', Token::star);
 CASE('/', Token::slash);
-CASE('(', Token::Token::l_paren);
-CASE(')', Token::Token::r_paren);
-CASE(':', Token::Token::colon);
-CASE(',', Token::Token::comma);
+CASE('(', Token::l_paren);
+CASE(')', Token::r_paren);
+CASE(':', Token::colon);
+CASE(',', Token::comma);
 #undef CASE
     default:
       formToken(token, BufferPtr + 1, Token::unknown);

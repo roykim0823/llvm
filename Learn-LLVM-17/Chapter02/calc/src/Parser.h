@@ -17,7 +17,9 @@ class Parser {
 
   void advance() { Lex.next(Tok); }
 
-  bool expect(Token::TokenKind Kind) {
+  // Expect the current token to be of the given kind.
+  // If so, return false. Otherwise, report an error and return true.  
+  bool expect(Token::TokenKind Kind) {  
     if (!Tok.is(Kind)) {
       error();
       return true;

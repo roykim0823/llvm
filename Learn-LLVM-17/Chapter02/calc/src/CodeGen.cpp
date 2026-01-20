@@ -35,7 +35,7 @@ public:
                                         "entry", MainFn);
     Builder.SetInsertPoint(BB);
 
-    Tree->accept(*this);
+    Tree->accept(*this);  // the tree reaversal can begin here
 
     FunctionType *CalcWriteFnTy =
         FunctionType::get(VoidTy, {Int32Ty}, false);
@@ -44,7 +44,7 @@ public:
         "calc_write", M);
     Builder.CreateCall(CalcWriteFnTy, CalcWriteFn, {V});
 
-    Builder.CreateRet(Int32Zero);
+    Builder.CreateRet(Int32Zero);  // Return 0 from the m
   }
 
   virtual void visit(Factor &Node) override {
@@ -84,6 +84,8 @@ public:
     Function *ReadFn = Function::Create(
         ReadFty, GlobalValue::ExternalLinkage, "calc_read",
         M);
+    
+    // The method loops through the variable names
     for (auto I = Node.begin(), E = Node.end(); I != E;
          ++I) {
       StringRef Var = *I;
