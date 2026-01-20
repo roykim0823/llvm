@@ -26,6 +26,8 @@ using namespace llvm;
 
 // The lexer returns tokens [0-255] if it is an unknown character, otherwise one
 // of these for known things.
+// Each token returned by the lexer includes a token code and potentially some 
+// metadata.
 enum Token {
   tok_eof = -1,
 
@@ -95,7 +97,10 @@ static int gettok() {
 //===----------------------------------------------------------------------===//
 // Abstract Syntax Tree (aka Parse Tree)
 //===----------------------------------------------------------------------===//
-
+// The parser will uses a combination of recursive descent parsing and operator
+// precedence parsing to parse the input text and produce a AST.
+// The AST for a program captures its behavior in such a way that it is easy for
+// later stages of the compiler (e.g., code generation) to interpret.
 namespace {
 
 /// ExprAST - Base class for all expression nodes.
@@ -221,6 +226,8 @@ std::unique_ptr<PrototypeAST> LogErrorP(const char *Str) {
 
 static std::unique_ptr<ExprAST> ParseExpression();
 
+// The routine eats all of the tokens that correspond to the production and returns the lexer buffer 
+// This is a fairly standard recursive descent parser structure.
 /// numberexpr ::= number
 static std::unique_ptr<ExprAST> ParseNumberExpr() {
   auto Result = std::make_unique<NumberExprAST>(NumVal);
@@ -230,8 +237,10 @@ static std::unique_ptr<ExprAST> ParseNumberExpr() {
 
 /// parenexpr ::= '(' expression ')'
 static std::unique_ptr<ExprAST> ParseParenExpr() {
+  // This eats the ( ) tokens. Once the parser constructs the AST, parentheses are not needed!
   getNextToken(); // eat (.
-  auto V = ParseExpression();
+  auto V = ParseExpression();   // recursion by calling ParseExpression -> ParseParenExpr
+                                // This is powerful as it allows nested expressions/recursive grammars
   if (!V)
     return nullptr;
 
@@ -333,7 +342,6 @@ static std::unique_ptr<ExprAST> ParseBinOpRHS(int ExprPrec,
 
 /// expression
 ///   ::= primary binoprhs
-///
 static std::unique_ptr<ExprAST> ParseExpression() {
   auto LHS = ParsePrimary();
   if (!LHS)
@@ -399,10 +407,11 @@ static std::unique_ptr<PrototypeAST> ParseExtern() {
 // Code Generation
 //===----------------------------------------------------------------------===//
 
-static std::unique_ptr<LLVMContext> TheContext;
-static std::unique_ptr<Module> TheModule;
-static std::unique_ptr<IRBuilder<>> Builder;
-static std::map<std::string, Value *> NamedValues;
+static std::unique_ptr<LLVMContext> TheContext;  // An opaque object that owns a lot of core LLVM data structures, such as the type and constant value tables.
+static std::unique_ptr<Module> TheModule;        // an LLVM construct that contains functions and global variables.
+static std::unique_ptr<IRBuilder<>> Builder;     // A helper object that makes it easy to generate LLVM instructions.
+static std::map<std::string, Value *> NamedValues;  // it keeps track of which values are defined in the current scope and what their LLVM representation is.
+                                                    // a.k.a. symbol table
 
 Value *LogErrorV(const char *Str) {
   LogError(Str);
@@ -422,6 +431,7 @@ Value *VariableExprAST::codegen() {
 }
 
 Value *BinaryExprAST::codegen() {
+  // Recursively emits code for the lef-hand side of the expression, then the righ-hand side.
   Value *L = LHS->codegen();
   Value *R = RHS->codegen();
   if (!L || !R)

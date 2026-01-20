@@ -682,6 +682,7 @@ extern "C" DLLEXPORT double printd(double X) {
 //===----------------------------------------------------------------------===//
 
 int main() {
+  // To support JIT
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
   InitializeNativeTargetAsmParser();
@@ -697,7 +698,7 @@ int main() {
   fprintf(stderr, "ready> ");
   getNextToken();
 
-  TheJIT = ExitOnErr(KaleidoscopeJIT::Create());
+  TheJIT = ExitOnErr(KaleidoscopeJIT::Create());  // Create the JIT.
 
   InitializeModuleAndPassManager();
 
