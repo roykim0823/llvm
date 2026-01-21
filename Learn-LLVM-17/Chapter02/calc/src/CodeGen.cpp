@@ -1,5 +1,6 @@
 #include "CodeGen.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/IR/Module.h" // for Module in LLVM 21
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/raw_ostream.h"
