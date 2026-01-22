@@ -25,6 +25,7 @@ public:
   virtual void accept(ASTVisitor &V) = 0;
 };
 
+// Just a common class hierarchy
 class Expr : public AST {
 public:
   Expr() {}
@@ -48,6 +49,9 @@ public:
   }
 };
 
+// In contrast to the parser, the BinaryOp class makes no distinction
+// between +/- and */ operators.
+// The precedence of the operators is handled in the tree structure.
 class BinaryOp : public Expr {
 public:
   enum Operator { Plus, Minus, Mul, Div };

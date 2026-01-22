@@ -1,6 +1,8 @@
 #include "Lexer.h"
 
 namespace charinfo {
+
+// LLVM_READNONE is used to indicate that a function does not read or write memory.
 LLVM_READNONE inline bool isWhitespace(char c) {
   return c == ' ' || c == '\t' || c == '\f' || c == '\v' ||
          c == '\r' || c == '\n';

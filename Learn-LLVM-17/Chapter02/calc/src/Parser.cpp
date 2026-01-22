@@ -6,8 +6,9 @@ AST *Parser::parse() {
   return Res;
 }
 
+// calc ::= 'with' ident (',' ident)* ':')? expr; 
 AST *Parser::parseCalc() {
-  Expr *E;
+  Expr *E;  // Early declaration due to goto usage
   llvm::SmallVector<llvm::StringRef, 8> Vars;
   if (Tok.is(Token::KW_with)) {
     advance();
@@ -25,6 +26,8 @@ AST *Parser::parseCalc() {
     if (consume(Token::colon))
       goto _error;
   }
+
+  // Parse the expression part
   E = parseExpr();
   if (expect(Token::eoi))
     goto _error;
@@ -32,14 +35,17 @@ AST *Parser::parseCalc() {
     return E;
   else
     return new WithDecl(Vars, E);
+
 _error:
   while (Tok.getKind() != Token::eoi)
     advance();
   return nullptr;
 }
 
+// expr : term (( "+" | "-" ) term)* ;
 Expr *Parser::parseExpr() {
   Expr *Left = parseTerm();
+  // the use of isOneOf() to simplify the check for several tokens
   while (Tok.isOneOf(Token::plus, Token::minus)) {
     BinaryOp::Operator Op = Tok.is(Token::plus)
                                 ? BinaryOp::Plus
@@ -51,6 +57,7 @@ Expr *Parser::parseExpr() {
   return Left;
 }
 
+// term : factor ( ( "*" | "/" ) factor )* ;
 Expr *Parser::parseTerm() {
   Expr *Left = parseFactor();
   while (Tok.isOneOf(Token::star, Token::slash)) {
@@ -63,6 +70,7 @@ Expr *Parser::parseTerm() {
   return Left;
 }
 
+// factor : ident | number | "(" expr ")" ;
 Expr *Parser::parseFactor() {
   Expr *Res = nullptr;
   switch (Tok.getKind()) {

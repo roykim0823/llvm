@@ -5,6 +5,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/raw_ostream.h"
 
+// Declare a command-line tool option to provide the input expression
 static llvm::cl::opt<std::string>
     Input(llvm::cl::Positional,
           llvm::cl::desc("<input expression>"),

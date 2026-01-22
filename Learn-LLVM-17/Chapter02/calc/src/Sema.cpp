@@ -2,6 +2,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 
+// The semantic analyzer is implemented using a visitor.
 namespace {
 class DeclCheck : public ASTVisitor {
   llvm::StringSet<> Scope;
@@ -40,8 +41,7 @@ public:
   };
 
   virtual void visit(WithDecl &Node) override {
-    for (auto I = Node.begin(), E = Node.end(); I != E;
-         ++I) {
+    for (auto I = Node.begin(), E = Node.end(); I != E; ++I) {
       if (!Scope.insert(*I).second)
         error(Twice, *I);
     }

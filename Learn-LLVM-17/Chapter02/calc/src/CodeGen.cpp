@@ -36,16 +36,17 @@ public:
                                         "entry", MainFn);
     Builder.SetInsertPoint(BB);
 
-    Tree->accept(*this);  // the tree reaversal can begin here
+    Tree->accept(*this);  // the tree traversal can begin here
+                          // vist(WithDecl) will be called first
 
     FunctionType *CalcWriteFnTy =
         FunctionType::get(VoidTy, {Int32Ty}, false);
     Function *CalcWriteFn = Function::Create(
         CalcWriteFnTy, GlobalValue::ExternalLinkage,
         "calc_write", M);
-    Builder.CreateCall(CalcWriteFnTy, CalcWriteFn, {V});
+    Builder.CreateCall(CalcWriteFnTy, CalcWriteFn, {V});  // V is the current value
 
-    Builder.CreateRet(Int32Zero);  // Return 0 from the m
+    Builder.CreateRet(Int32Zero);  // Return 0 from the main function
   }
 
   virtual void visit(Factor &Node) override {
@@ -109,6 +110,7 @@ public:
 };
 } // namespace
 
+// The frontend compiler generates LLVM IR
 void CodeGen::compile(AST *Tree) {
   LLVMContext Ctx;
   Module *M = new Module("calc.expr", Ctx);

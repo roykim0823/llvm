@@ -34,6 +34,8 @@ class Parser {
     return false;
   }
 
+  // For each non-terminal of the grammar,
+  // a method to parse the rule is declared
   AST *parseCalc();
   Expr *parseExpr();
   Expr *parseTerm();
@@ -43,7 +45,7 @@ public:
   Parser(Lexer &Lex) : Lex(Lex), HasError(false) {
     advance();
   }
-  AST *parse();
+  AST *parse();  // main entry point
   bool hasError() { return HasError; }
 };
 

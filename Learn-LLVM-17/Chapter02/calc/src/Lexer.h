@@ -37,6 +37,8 @@ public:
   }
 
   bool is(TokenKind K) const { return Kind == K; }
+
+  // isOneof for variadic number of arguments
   bool isOneOf(TokenKind K1, TokenKind K2) const {
     return is(K1) || is(K2);
   }
