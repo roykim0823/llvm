@@ -114,6 +114,9 @@ llvm::Function *FunctionAST::codegen(CodegenContext &ctx) {
     // Validate the generated code, checking for consistency.
     llvm::verifyFunction(*TheFunction);
 
+    // Run the optimizer on the function.
+    ctx.TheFPM->run(*TheFunction);
+
     return TheFunction;
   }
 
