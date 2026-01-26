@@ -37,7 +37,7 @@ using IdentList = std::vector<std::pair<SMLoc, StringRef>>;
 
 class Decl {
 public:
-  enum DeclKind {
+  enum DeclKind {  // For LLVM-style RTTI
     DK_Module,
     DK_Const,
     DK_Type,
@@ -47,10 +47,10 @@ public:
   };
 
 private:
-  const DeclKind Kind;
+  const DeclKind Kind;  // For LLVM-style RTTI
 
 protected:
-  Decl *EnclosingDecL;
+  Decl *EnclosingDecL;  // it is used to generate the nested procedures
   SMLoc Loc;
   StringRef Name;
 
@@ -60,7 +60,7 @@ public:
       : Kind(Kind), EnclosingDecL(EnclosingDecL), Loc(Loc),
         Name(Name) {}
 
-  DeclKind getKind() const { return Kind; }
+  DeclKind getKind() const { return Kind; } // For LLVM-style RTTI
   SMLoc getLocation() { return Loc; }
   StringRef getName() { return Name; }
   Decl *getEnclosingDecl() { return EnclosingDecL; }
@@ -86,7 +86,9 @@ public:
   const StmtList &getStmts() { return Stmts; }
   void setStmts(StmtList &L) { Stmts = L; }
 
-  static bool classof(const Decl *D) {
+  // To determine if a given Decel is a ModuleDeclaration
+  // All subclass of Decl must implement this method for LLVM-style RTTI
+  static bool classof(const Decl *D) {  
     return D->getKind() == DK_Module;
   }
 };
@@ -112,7 +114,7 @@ public:
                   StringRef Name)
       : Decl(DK_Type, EnclosingDecL, Loc, Name) {}
 
-  static bool classof(const Decl *D) {
+  static bool classof(const Decl *D) {  // For LLVM-style RTTI
     return D->getKind() == DK_Type;
   }
 };
@@ -127,7 +129,7 @@ public:
 
   TypeDeclaration *getType() { return Ty; }
 
-  static bool classof(const Decl *D) {
+  static bool classof(const Decl *D) {  // For LLVM-style RTTI
     return D->getKind() == DK_Var;
   }
 };
@@ -147,7 +149,7 @@ public:
   TypeDeclaration *getType() { return Ty; }
   bool isVar() { return IsVar; }
 
-  static bool classof(const Decl *D) {
+  static bool classof(const Decl *D) {  // For LLVM-style RTTI
     return D->getKind() == DK_Param;
   }
 };
@@ -184,7 +186,7 @@ public:
   const StmtList &getStmts() { return Stmts; }
   void setStmts(StmtList &L) { Stmts = L; }
 
-  static bool classof(const Decl *D) {
+  static bool classof(const Decl *D) {  // For LLVM-style RTTI
     return D->getKind() == DK_Proc;
   }
 };

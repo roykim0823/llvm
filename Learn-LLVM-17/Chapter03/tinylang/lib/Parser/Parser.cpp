@@ -181,7 +181,7 @@ bool Parser::parseProcedureDeclaration(
       Actions.actOnProcedureDeclaration(
           Tok.getLocation(), Tok.getIdentifier());
 
-  EnterDeclScope S(Actions, D);
+  EnterDeclScope S(Actions, D);  // new scope is established
   FormalParamList Params;
   Decl *RetType = nullptr;
   advance();
@@ -189,6 +189,7 @@ bool Parser::parseProcedureDeclaration(
     if (parseFormalParameters(Params, RetType))
       return _errorhandler();
   }
+  // Check if the declaration used for the return type is a type declaration, page 79
   Actions.actOnProcedureHeading(D, Params, RetType);
   if (expect(tok::semi))
     return _errorhandler();

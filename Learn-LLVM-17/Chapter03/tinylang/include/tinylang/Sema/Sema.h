@@ -91,6 +91,7 @@ public:
                            StringRef Name);
 };
 
+// A simple RAII helper class to enter/leave declaration scopes
 class EnterDeclScope {
   Sema &Semantics;
 

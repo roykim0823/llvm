@@ -7,6 +7,7 @@ const char *DiagnosticText[] = {
 #define DIAG(ID, Level, Msg) Msg,
 #include "tinylang/Basic/Diagnostic.def"
 };
+
 SourceMgr::DiagKind DiagnosticKind[] = {
 #define DIAG(ID, Level, Msg) SourceMgr::DK_##Level,
 #include "tinylang/Basic/Diagnostic.def"

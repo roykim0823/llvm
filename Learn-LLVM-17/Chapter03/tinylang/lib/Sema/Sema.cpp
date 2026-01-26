@@ -156,6 +156,7 @@ void Sema::actOnFormalParameterDeclaration(
 
 ProcedureDeclaration *
 Sema::actOnProcedureDeclaration(SMLoc Loc, StringRef Name) {
+  // The semantic analyzer chekcs the name in the current scope and returns AST node
   ProcedureDeclaration *P =
       new ProcedureDeclaration(CurrentDecl, Loc, Name);
   if (!CurrentScope->insert(P))

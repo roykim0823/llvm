@@ -13,14 +13,9 @@ class Lexer;
 class Token {
   friend class Lexer;
 
-  /// The location of the token.
-  const char *Ptr;
-
-  /// The length of the token.
-  size_t Length;
-
-  /// Kind - The actual flavor of token this is.
-  tok::TokenKind Kind;
+  const char *Ptr;  // The location of the token.
+  size_t Length;    // The length of the token.
+  tok::TokenKind Kind;  // Kind - The actual flavor of token this is.
 
 public:
   tok::TokenKind getKind() const { return Kind; }
