@@ -21,7 +21,7 @@ class CGProcedure {
 
   ProcedureDeclaration *Proc;
   llvm::FunctionType *Fty;
-  llvm::Function *Fn;
+  llvm::Function *Fn;  // denote the current function
 
   struct BasicBlockDef {
     // Maps the variable (or formal parameter) to its

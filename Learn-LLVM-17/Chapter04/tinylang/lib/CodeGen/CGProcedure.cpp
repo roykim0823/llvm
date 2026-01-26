@@ -28,7 +28,7 @@ CGProcedure::readLocalVariable(llvm::BasicBlock *BB,
   auto Val = CurrentDef[BB].Defs.find(Decl);
   if (Val != CurrentDef[BB].Defs.end())
     return Val->second;
-  return readLocalVariableRecursive(BB, Decl);
+  return readLocalVariableRecursive(BB, Decl);  // search for the value in the predecessors
 }
 
 llvm::Value *CGProcedure::readLocalVariableRecursive(
@@ -355,7 +355,8 @@ void CGProcedure::emitStmt(IfStatement *Stmt) {
 void CGProcedure::emitStmt(WhileStatement *Stmt) {
   // The basic block for the condition.
   llvm::BasicBlock *WhileCondBB = llvm::BasicBlock::Create(
-      CGM.getLLVMCtx(), "while.cond", Fn);
+      CGM.getLLVMCtx(), "while.cond", Fn);  // CGM.getLLVMCte() return the LLVM context
+                                            // Fn is the current function
   // The basic block for the while body.
   llvm::BasicBlock *WhileBodyBB = llvm::BasicBlock::Create(
       CGM.getLLVMCtx(), "while.body", Fn);
@@ -365,14 +366,15 @@ void CGProcedure::emitStmt(WhileStatement *Stmt) {
 
   Builder.CreateBr(WhileCondBB);
   sealBlock(Curr);
-  setCurr(WhileCondBB);
+
+  setCurr(WhileCondBB);  // Set the current basic block to the while condition block
   llvm::Value *Cond = emitExpr(Stmt->getCond());
   Builder.CreateCondBr(Cond, WhileBodyBB, AfterWhileBB);
 
   setCurr(WhileBodyBB);
   emit(Stmt->getWhileStmts());
   Builder.CreateBr(WhileCondBB);
-  sealBlock(WhileCondBB);
+  sealBlock(WhileCondBB);  
   sealBlock(Curr);
 
   setCurr(AfterWhileBB);
