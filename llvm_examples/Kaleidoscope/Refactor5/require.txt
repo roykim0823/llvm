@@ -1,0 +1,2 @@
+# To run "llvm-as < t.ll | opt -passes=view-cfg"
+sudo apt install xdot graphviz
