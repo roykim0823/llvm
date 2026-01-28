@@ -29,6 +29,9 @@ set(SOURCES
 
 add_executable(toy ${SOURCES})
 
+# Export symbols for JIT visibility (equivalent to -rdynamic)
+set_target_properties(toy PROPERTIES ENABLE_EXPORTS TRUE)
+
 # This is the magic line: it adds 'include/' to the header search path
 target_include_directories(toy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(toy PRIVATE ${llvm_libs})

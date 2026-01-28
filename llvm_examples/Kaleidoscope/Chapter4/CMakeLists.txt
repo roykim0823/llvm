@@ -26,6 +26,9 @@ llvm_map_components_to_libnames(llvm_libs core orcjit native)
 # This handles --ldflags, --system-libs, and --libs automatically
 target_link_libraries(toy PRIVATE ${llvm_libs})
 
+# Export symbols for JIT visibility (equivalent to -rdynamic)
+set_target_properties(toy PROPERTIES ENABLE_EXPORTS TRUE)
+
 # Optional: Match the C++ standard required by your LLVM version
 set_target_properties(toy PROPERTIES
     CXX_STANDARD 17
