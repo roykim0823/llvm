@@ -9,6 +9,7 @@ include(DetermineGCCCompatible)
 if(NOT APPLE)
   include(ChooseMSVCCRT)
 endif()
+add_compile_options(-include cstdint) # to resolve header pruning on ubuntu 25.04/gcc 15.2.0
 
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})

@@ -1,6 +1,6 @@
 mkdir build
 cd build
-cmake -DCMAKE_CXX_COMPILER=clang++ ..
+cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang ..
 make
 ./src/calc "with a: a*3"
 ./src/calc "with a, b: a*3+b*2" | llc -filetype=obj -relocation-model=pic -o expr.o
