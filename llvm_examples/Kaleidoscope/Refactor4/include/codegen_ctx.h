@@ -29,13 +29,11 @@ public:
     std::unique_ptr<llvm::legacy::FunctionPassManager> TheFPM; // The function pass manager is used to optimize functions.
     std::unique_ptr<llvm::orc::KaleidoscopeJIT> TheJIT;
     llvm::ExitOnError ExitOnErr;
-
-    CodegenContext() {
+    
+    void InitializeModuleAndPassManager() {
         // Open a new context and module.
         theContext = std::make_unique<llvm::LLVMContext>();
-        theModule = std::make_unique<llvm::Module>("my cool jit", *theContext);
-
-        TheJIT = ExitOnErr(llvm::orc::KaleidoscopeJIT::Create());
+        theModule = std::make_unique<llvm::Module>("my cool jit", *theContext);        
         theModule->setDataLayout(TheJIT->getDataLayout());
 
         // Create a new builder for the module.

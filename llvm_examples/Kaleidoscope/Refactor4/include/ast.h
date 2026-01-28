@@ -115,8 +115,9 @@ public:
   llvm::Function *codegen(CodegenContext &ctx);
 };
 
-
-
+// declare FunctionProtos , make it global
+static std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos; // To Support JIT
+//static llvm::Function *getFunction(std::string Name, CodegenContext &ctx);  // To Support JIT
 // std::unique_ptr<ExprAST> logError(const char* str);
 // std::unique_ptr<PrototypeAST> logErrorP(const char* str);
 // llvm::Value *logErrorV(const char *str);

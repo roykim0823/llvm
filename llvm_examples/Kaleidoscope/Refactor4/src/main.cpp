@@ -10,8 +10,11 @@ int main() {
 
     toy::Lexer lexer;
     toy::CodegenContext ctx;
+    // Initialize the JIT in main
+    ctx.TheJIT = ctx.ExitOnErr(llvm::orc::KaleidoscopeJIT::Create());
     toy::Parser parser(lexer, ctx);
-    
+
+    ctx.InitializeModuleAndPassManager();
     // Run the main "interpreter loop" now.
     parser.mainLoop();
 
