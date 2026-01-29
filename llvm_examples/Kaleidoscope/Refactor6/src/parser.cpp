@@ -8,8 +8,9 @@ using namespace toy;
 // Global Variables
 /// BinopPrecedence - This holds the precedence for each binary operator that is
 /// defined.    
-std::map<char, int> binopPrecedence;  // solution 1
-extern std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
+std::map<char, int> binopPrecedence;
+extern std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;  // define in ast.cpp
+
 void init_binop() {
     binopPrecedence['<'] = 10;
     binopPrecedence['+'] = 20;
