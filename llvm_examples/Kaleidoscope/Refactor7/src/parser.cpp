@@ -12,8 +12,10 @@ std::map<char, int> BinopPrecedence;
 extern std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;  // define in ast.cpp
 // ------------------------------
 
-
 void init_binop() {
+    // Install standard binary operators.
+    // 1 is lowest precedence.
+    BinopPrecedence['='] = 2;
     BinopPrecedence['<'] = 10;
     BinopPrecedence['+'] = 20;
     BinopPrecedence['-'] = 20;
@@ -166,7 +168,61 @@ std::unique_ptr<ExprAST> Parser::parseForExpr() {
                                        std::move(Step), std::move(Body));
 }
 
-// primary ::= identifierexpr | numberexpr | parenexpr
+/// varexpr ::= 'var' identifier ('=' expression)?
+//                    (',' identifier ('=' expression)?)* 'in' expression
+std::unique_ptr<ExprAST> Parser::parseVarExpr() {
+  getNextToken(); // eat the var.
+
+  std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> VarNames;
+
+  // At least one variable name is required.
+  if (curTok != tok_identifier)
+    return logError("expected identifier after var");
+
+  while (true) {
+    std::string Name = lexer.getIdentifierStr();
+    getNextToken(); // eat identifier.
+
+    // Read the optional initializer.
+    std::unique_ptr<ExprAST> Init = nullptr;
+    if (curTok == '=') {
+      getNextToken(); // eat the '='.
+
+      Init = parseExpression();
+      if (!Init)
+        return nullptr;
+    }
+
+    VarNames.push_back(std::make_pair(Name, std::move(Init)));
+
+    // End of var list, exit loop.
+    if (curTok != ',')
+      break;
+    getNextToken(); // eat the ','.
+
+    if (curTok != tok_identifier)
+      return logError("expected identifier list after var");
+  }
+
+  // At this point, we have to have 'in'.
+  if (curTok != tok_in)
+    return logError("expected 'in' keyword after 'var'");
+  getNextToken(); // eat 'in'.
+
+  auto Body = parseExpression();
+  if (!Body)
+    return nullptr;
+
+  return std::make_unique<VarExprAST>(std::move(VarNames), std::move(Body));
+}
+
+/// primary
+///   ::= identifierexpr
+///   ::= numberexpr
+///   ::= parenexpr
+///   ::= ifexpr
+///   ::= forexpr
+///   ::= varexpr
 std::unique_ptr<ExprAST> Parser::parsePrimary() {
     switch (curTok) {
     case tok_identifier: return parseIdentifierExpr();
@@ -174,6 +230,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
     case '(':            return parseParenExpr();
     case tok_if:         return parseIfExpr();
     case tok_for:        return parseForExpr();
+    case tok_var:        return parseVarExpr();
     default:             return logError("unknown token when expecting an expression");
     }
 }

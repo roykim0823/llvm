@@ -61,6 +61,7 @@ public:
   VariableExprAST(const std::string &Name) : Name(Name) {}
 
   llvm::Value *codegen(CodegenContext &ctx) override;
+  const std::string &getName() const { return Name; }
 };
 
 /// UnaryExprAST - Expression class for a unary operator.
@@ -128,6 +129,20 @@ public:
   llvm::Value *codegen(CodegenContext &ctx) override;
 };
 
+/// VarExprAST - Expression class for var/in
+class VarExprAST : public ExprAST {
+  std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> VarNames;
+  std::unique_ptr<ExprAST> Body;
+
+public:
+  VarExprAST(
+      std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> VarNames,
+      std::unique_ptr<ExprAST> Body)
+      : VarNames(std::move(VarNames)), Body(std::move(Body)) {}
+
+  llvm::Value *codegen(CodegenContext &ctx) override;
+};
+
 /// PrototypeAST - This class represents the "prototype" for a function,
 /// which captures its name, and its argument names (thus implicitly the number
 /// of arguments the function takes).
@@ -170,14 +185,6 @@ public:
   
   llvm::Function *codegen(CodegenContext &ctx);
 };
-
-// declare FunctionProtos , make it global
-// static std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos; // To Support JIT
-//static llvm::Function *getFunction(std::string Name, CodegenContext &ctx);  // To Support JIT
-//llvm::Function *getFunction(std::string Name, CodegenContext &ctx);  // To Support JIT
-// std::unique_ptr<ExprAST> logError(const char* str);
-// std::unique_ptr<PrototypeAST> logErrorP(const char* str);
-// llvm::Value *logErrorV(const char *str);
 
 } // end namespace toy
 

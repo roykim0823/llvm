@@ -10,18 +10,10 @@
 
 
 namespace toy {
-//static std::map<char, int> binopPrecedence;  // it is used in AST, so move to log
 
 class Parser {
 public:
     Parser(Lexer& lexer, CodegenContext& ctx);
-    // Parser(Lexer& lexer, CodegenContext& ctx) : lexer(lexer), ctx(ctx) 
-    // {
-    //     binopPrecedence['<'] = 10;
-    //     binopPrecedence['+'] = 20;
-    //     binopPrecedence['-'] = 20;
-    //     binopPrecedence['*'] = 40;
-    // }
 
     void mainLoop();
     int getNextToken();  // Reada another token from the lexer and updates curTok
@@ -52,6 +44,7 @@ private:
     std::unique_ptr<ExprAST> parsePrimary();
     std::unique_ptr<ExprAST> parseUnary();
     std::unique_ptr<ExprAST> parseBinOpRHS(int exprPrec, std::unique_ptr<ExprAST> lhs);
+    std::unique_ptr<ExprAST> parseVarExpr();
     std::unique_ptr<PrototypeAST> parsePrototype();
     std::unique_ptr<FunctionAST> parseDefinition();
     std::unique_ptr<FunctionAST> parseTopLevelExpr();

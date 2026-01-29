@@ -7,6 +7,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
@@ -40,6 +41,8 @@ public:
         // Create a new pass manager attached to it.
         TheFPM = std::make_unique<llvm::legacy::FunctionPassManager>(theModule.get());
 
+        // Promote allocas to registers.
+        TheFPM->add(llvm::createPromoteMemoryToRegisterPass());
         // Do simple "peephole" optimizations and bit-twiddling optzns.
         TheFPM->add(llvm::createInstructionCombiningPass());
         // Reassociate expressions.

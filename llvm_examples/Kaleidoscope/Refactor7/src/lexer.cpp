@@ -24,6 +24,7 @@ int Lexer::gettok() {
         if (identifierStr == "in") return tok_in;
         if (identifierStr == "binary") return tok_binary;
         if (identifierStr == "unary") return tok_unary;
+        if (identifierStr == "var") return tok_var;
         return tok_identifier;
     }
 
