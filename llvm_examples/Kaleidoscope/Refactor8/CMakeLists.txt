@@ -13,10 +13,10 @@ find_package(LLVM REQUIRED CONFIG)
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
-
+get_property(all_llvm_components GLOBAL PROPERTY LLVM_LIBS)
 # 4. Map the components to libraries
 # The 'core' in your command corresponds to the LLVMCore component
-llvm_map_components_to_libnames(llvm_libs core orcjit native)
+llvm_map_components_to_libnames(llvm_libs core orcjit native)  
 
 # Define source files with their new paths
 set(SOURCES

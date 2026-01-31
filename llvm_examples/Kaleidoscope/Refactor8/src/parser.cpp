@@ -388,12 +388,6 @@ void Parser::handleDefinition() {
       fprintf(stderr, "Read function definition:\n");
       FnIR->print(llvm::errs());
       fprintf(stderr, "\n");
-
-      // To Support JIT
-      ctx.ExitOnErr(ctx.TheJIT->addModule(
-          llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext))));
-      ctx.InitializeModuleAndPassManager();
-      // --- END JIT support
     }
   } else {
     // Skip token for error recovery.
@@ -407,7 +401,6 @@ void Parser::handleExtern() {
       fprintf(stderr, "Read extern:\n");
       FnIR->print(llvm::errs());
       fprintf(stderr, "\n");
-      FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST);  // To Support JIT
     }
   } else {
     // Skip token for error recovery.
@@ -418,38 +411,7 @@ void Parser::handleExtern() {
 void Parser::handleTopLevelExpression() {
   // Evaluate a top-level expression into an anonymous function.
   if (auto FnAST = parseTopLevelExpr()) {
-    if (auto *FnIR = FnAST->codegen(ctx)) {
-      fprintf(stderr, "Read top-level expression:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-
-      // Remove the anonymous expression.
-      //FnIR->eraseFromParent();  // no need with the below JIT
-
-      // JIT implementation
-      //---------------------------------------------------------------------
-      // Create a ResourceTracker to track JIT'd memory allocated to our
-      // anonymous expression -- that way we can free it after executing.
-      auto RT = ctx.TheJIT->getMainJITDylib().createResourceTracker();
-
-      auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext));
-      ctx.ExitOnErr(ctx.TheJIT->addModule(std::move(TSM), RT));
-      ctx.InitializeModuleAndPassManager();
-
-      // Search the JIT for the __anon_expr symbol.
-      auto ExprSymbol = ctx.ExitOnErr(ctx.TheJIT->lookup("__anon_expr"));
-
-      // Get the symbol's address and cast it to the right type (takes no
-      // arguments, returns a double) so we can call it as a native function.
-      double (*FP)() = ExprSymbol.getAddress().toPtr<double (*)()>();
-      fprintf(stderr, "Evaluated to %f\n", FP());
-
-      // Delete the anonymous expression module from the JIT.
-      ctx.ExitOnErr(RT->remove());
-      //---------------------------------------------------------------------
-
-
-    }
+    FnAST->codegen(ctx);
   } else {
     // Skip token for error recovery.
     getNextToken();

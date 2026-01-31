@@ -46,9 +46,9 @@ int compile_obj(toy::CodegenContext& ctx) {
 
   // Instead of InitializeAllTargetInfos(), etc.
   // it works without all-target in CMakeLists.txt
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
-  llvm::InitializeNativeTargetAsmParser();
+  // llvm::InitializeNativeTarget();
+  // llvm::InitializeNativeTargetAsmPrinter();
+  // llvm::InitializeNativeTargetAsmParser();
   
 
   auto TargetTriple = llvm::sys::getDefaultTargetTriple();
@@ -65,7 +65,7 @@ int compile_obj(toy::CodegenContext& ctx) {
     return 1;
   }
 
-  auto CPU = "aarch64";
+  auto CPU = "generic";
   auto Features = "";
 
   llvm::TargetOptions opt;
@@ -102,15 +102,12 @@ int compile_obj(toy::CodegenContext& ctx) {
 
 
 int main() {
-    // To support JIT
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
     llvm::InitializeNativeTargetAsmParser();
 
     toy::Lexer lexer;
     toy::CodegenContext ctx;
-    // Initialize the JIT in main
-    ctx.TheJIT = ctx.ExitOnErr(llvm::orc::KaleidoscopeJIT::Create());
     toy::Parser parser(lexer, ctx);
 
       // Prime the first token.

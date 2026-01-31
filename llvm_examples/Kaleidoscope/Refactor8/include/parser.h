@@ -27,14 +27,6 @@ private:
 
     int getTokPrecedence();
 
-    // /// BinopPrecedence - This holds the precedence for each binary operator that is
-    // /// defined.    
-    // std::map<char, int> binopPrecedence;  // it is used in AST, so move to log
-
-    /// LogError* - These are little helper functions for error handling.
-    //std::unique_ptr<ExprAST> logError(const char* str);
-    //std::unique_ptr<PrototypeAST> logErrorP(const char* str);
-
     std::unique_ptr<ExprAST> parseExpression();
     std::unique_ptr<ExprAST> parseNumberExpr();
     std::unique_ptr<ExprAST> parseParenExpr();
@@ -50,7 +42,6 @@ private:
     std::unique_ptr<FunctionAST> parseTopLevelExpr();
     std::unique_ptr<PrototypeAST> parseExtern();
 
-    // Top-level parsing and JIT driver
     void handleDefinition();
     void handleExtern();
     void handleTopLevelExpression();

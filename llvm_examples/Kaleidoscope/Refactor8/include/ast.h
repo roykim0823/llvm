@@ -23,9 +23,6 @@
 
 namespace toy{
 
-// Use the global binopPre from parser.cpp
-//extern std::map<char, int> binopPrecedence;
-//extern std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos; // To Support JIT
 //===----------------------------------------------------------------------===//
 // Abstract Syntax Tree (aka Parse Tree)
 //===----------------------------------------------------------------------===//

@@ -14,7 +14,7 @@ using namespace toy;
 std::map<std::string, llvm::AllocaInst*> NamedValues;  // a.k.a. symbol table 
                                                     
 extern std::map<char, int> BinopPrecedence;  // Defined in parser.cpp
-std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos; // To Support JIT
+std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
 //-------------------------------------
 
 static llvm::Function *getFunction(std::string Name, CodegenContext &ctx) {
@@ -380,8 +380,6 @@ llvm::Function *PrototypeAST::codegen(CodegenContext &ctx) {
 }
 
 llvm::Function *FunctionAST::codegen(CodegenContext &ctx) {
-  // Transfer ownership of the prototype to the FunctionProtos map, but keep a
-  // reference to it for use below.  To Support JIT ---------------------
   auto &P = *Proto;
   FunctionProtos[Proto->getName()] = std::move(Proto);
   llvm::Function *TheFunction = getFunction(P.getName(), ctx);
@@ -418,7 +416,7 @@ llvm::Function *FunctionAST::codegen(CodegenContext &ctx) {
     llvm::verifyFunction(*TheFunction);
 
     // Run the optimizer on the function.
-    ctx.TheFPM->run(*TheFunction);
+    //ctx.TheFPM->run(*TheFunction);
 
     return TheFunction;
   }
