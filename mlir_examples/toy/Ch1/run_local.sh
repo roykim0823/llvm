@@ -1,0 +1,1 @@
+./build/toyc-ch1 ../../test_Example/Toy/Ch1/ast.toy -emit=ast
