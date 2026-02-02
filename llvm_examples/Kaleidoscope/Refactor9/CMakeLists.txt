@@ -25,6 +25,7 @@ set(SOURCES
     src/parser.cpp
     src/ast.cpp
     src/log.cpp
+    src/debug.cpp
 )
 
 add_executable(toy ${SOURCES})

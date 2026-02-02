@@ -10,6 +10,7 @@ using namespace toy;
 /// defined.    
 std::map<char, int> BinopPrecedence;
 extern std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;  // define in ast.cpp
+extern SourceLocation CurLoc;
 // ------------------------------
 
 void init_binop() {
@@ -68,10 +69,11 @@ std::unique_ptr<ExprAST> Parser::parseIdentifierExpr() {
     std::string idName = lexer.getIdentifierStr();
 
     SourceLocation LitLoc = CurLoc;
+
     getNextToken(); // eat identifier
 
     if (curTok != '(')  // Simple variable ref.
-        return std::make_unique<VariableExprAST>(idName);
+        return std::make_unique<VariableExprAST>(LitLoc, idName);
 
     getNextToken(); // eat (
     std::vector<std::unique_ptr<ExprAST>> args;
@@ -298,6 +300,8 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 std::unique_ptr<PrototypeAST> Parser::parsePrototype() {
   std::string FnName;
 
+  SourceLocation FnLoc = CurLoc;
+
   unsigned Kind = 0; // 0 = identifier, 1 = unary, 2 = binary.
   unsigned BinaryPrecedence = 30;
 
@@ -353,7 +357,7 @@ std::unique_ptr<PrototypeAST> Parser::parsePrototype() {
   if (Kind && ArgNames.size() != Kind)
     return logErrorP("Invalid number of operands for operator");
 
-  return std::make_unique<PrototypeAST>(FnName, ArgNames, Kind != 0,
+  return std::make_unique<PrototypeAST>(FnLoc, FnName, ArgNames, Kind != 0,
                                          BinaryPrecedence);
 }
 
@@ -371,9 +375,9 @@ std::unique_ptr<FunctionAST> Parser::parseDefinition() {
 // top-level expression ::= expression
 std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
   SourceLocation FnLoc = CurLoc;
-  if (auto E = ParseExpression()) {
+  if (auto E = parseExpression()) {
     // Make the top-level expression be our "main" function.
-    auto Proto = std::make_unique<PrototypeAST>(FnLoc, "main",
+    auto Proto = std::make_unique<PrototypeAST>(FnLoc, "main", 
                                                  std::vector<std::string>());
     return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
   }
@@ -388,17 +392,8 @@ std::unique_ptr<PrototypeAST> Parser::parseExtern() {
 
 void Parser::handleDefinition() {
   if (auto FnAST = parseDefinition()) {
-    if (auto *FnIR = FnAST->codegen(ctx)) {
-      fprintf(stderr, "Read function definition:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-
-      // To Support JIT
-      ctx.ExitOnErr(ctx.TheJIT->addModule(
-          llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext))));
-      ctx.InitializeModuleAndPassManager();
-      // --- END JIT support
-    }
+    if (!FnAST->codegen(ctx))
+      fprintf(stderr, "Error reading function definition:");
   } else {
     // Skip token for error recovery.
     getNextToken();
@@ -407,12 +402,10 @@ void Parser::handleDefinition() {
 
 void Parser::handleExtern() {
   if (auto ProtoAST = parseExtern()) {
-    if (auto *FnIR = ProtoAST->codegen(ctx)) {
-      fprintf(stderr, "Read extern:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-      FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST);  // To Support JIT
-    }
+    if (!ProtoAST->codegen(ctx))
+      fprintf(stderr, "Error reading extern");
+    else
+      FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST);
   } else {
     // Skip token for error recovery.
     getNextToken();
@@ -421,8 +414,8 @@ void Parser::handleExtern() {
 
 void Parser::handleTopLevelExpression() {
   // Evaluate a top-level expression into an anonymous function.
-  if (auto FnAST = ParseTopLevelExpr()) {
-    if (!FnAST->codegen()) {
+  if (auto FnAST = parseTopLevelExpr()) {
+    if (!FnAST->codegen(ctx)) {
       fprintf(stderr, "Error generating code for top level expr");
     }
   } else {
@@ -432,10 +425,8 @@ void Parser::handleTopLevelExpression() {
 }
 
 void Parser::mainLoop() {
-    fprintf(stderr, "ready> ");
-    getNextToken(); // Bootstrap the first token
     while (true) {
-        fprintf(stderr, "ready> ");
+        //fprintf(stderr, "ready> ");
         switch (curTok) {
         case tok_eof: return;
         case ';':     getNextToken(); break;  // ignore top-level semicolons.
@@ -446,6 +437,6 @@ void Parser::mainLoop() {
         
     }
     // Print out all of the generated code.
-    ctx.theModule->print(llvm::errs(), nullptr);
+    //ctx.theModule->print(llvm::errs(), nullptr);
 
 }

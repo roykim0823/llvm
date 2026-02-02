@@ -1,11 +1,11 @@
 
 #include "debug.h"
+#include "ast.h"
 
 using namespace toy;
 
-// Global Variables
-SourceLocation CurLoc;
 std::unique_ptr<llvm::DIBuilder> DBuilder;
+DebugInfo KSDbgInfo;
 
 int DebugInfoManager::advance() {
   int LastChar = getchar();
@@ -27,18 +27,19 @@ llvm::DIType *DebugInfo::getDoubleTy() {
   return DblTy;
 }
 
-void DebugInfo::emitLocation(ExprAST *AST) {
+void DebugInfo::emitLocation(ExprAST *AST, CodegenContext &ctx) {
   if (!AST)
-    return Builder->SetCurrentDebugLocation(llvm::DebugLoc());
+    return ctx.builder->SetCurrentDebugLocation(llvm::DebugLoc());
   llvm::DIScope *Scope;
   if (LexicalBlocks.empty())
     Scope = TheCU;
   else
     Scope = LexicalBlocks.back();
-  Builder->SetCurrentDebugLocation(llvm::DILocation::get(
+  ctx.builder->SetCurrentDebugLocation(llvm::DILocation::get(
       Scope->getContext(), AST->getLine(), AST->getCol(), Scope));
 }
 
+namespace toy{
 llvm::DISubroutineType *CreateFunctionType(unsigned NumArgs) {
   llvm::SmallVector<llvm::Metadata *, 8> EltTys;
   llvm::DIType *DblTy = KSDbgInfo.getDoubleTy();
@@ -50,4 +51,5 @@ llvm::DISubroutineType *CreateFunctionType(unsigned NumArgs) {
     EltTys.push_back(DblTy);
 
   return DBuilder->createSubroutineType(DBuilder->getOrCreateTypeArray(EltTys));
+}
 }

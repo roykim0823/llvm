@@ -5,7 +5,7 @@
 
 using namespace toy;
 
-extern SourceLocation CurLoc;
+SourceLocation CurLoc;
 
 /// gettok - Return the next token from standard input.
 int Lexer::gettok() {
