@@ -3,7 +3,7 @@
 
 #include "AST.h"
 #include "Lexer.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/raw_ostream.h"  // LLVM forbids <iostream>
 
 class Parser {
   Lexer &Lex;

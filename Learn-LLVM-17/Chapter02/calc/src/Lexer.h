@@ -58,7 +58,7 @@ public:
     BufferPtr = BufferStart;
   }
 
-  void next(Token &token);
+  void next(Token &token);  // the only public interface
 
 private:
   void formToken(Token &Result, const char *TokEnd,

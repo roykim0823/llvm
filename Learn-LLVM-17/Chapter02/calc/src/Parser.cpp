@@ -34,7 +34,7 @@ AST *Parser::parseCalc() {
   if (Vars.empty())
     return E;
   else
-    return new WithDecl(Vars, E);
+    return new WithDecl(Vars, E);  // return the created AST WithDecl(Vars, E) node
 
 _error:
   while (Tok.getKind() != Token::eoi)
@@ -87,6 +87,8 @@ Expr *Parser::parseFactor() {
   default:
     if (!Res)
       error();
+    // The guard prevents a second error message on a syntax error
+    // from the parenthesis's expression
     while (!Tok.isOneOf(Token::r_paren, Token::star,
                         Token::plus, Token::minus,
                         Token::slash, Token::eoi))
