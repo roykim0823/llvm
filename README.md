@@ -28,3 +28,15 @@ llvm-config provides the proper path for the library and header files.
 -lLLVMCore -lLLVMRemarks -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMTargetParser -lLLVMSupport -lLLVMDemangle
 -lrt -ldl -lm -lz
 ```
+
+# MLIR Build
+git checkout -b llvm-21 llvmorg-21.1.8
+
+cmake -G Ninja ../llvm    -DLLVM_ENABLE_PROJECTS=mlir    -DLLVM_BUILD_EXAMPLES=ON    -DLLVM_TARGETS_TO_BUILD="Native"    -DCMAKE_BUILD_TYPE=Release    -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+
+cmake --build . --target check-mlir -j3
+
+-------------
+Toy Example
+=============
+~/compiler/llvm-project/build/bin/toyc-ch1 ~/compiler/llvm-project/mlir/test/Examples/Toy/Ch1/ast.toy -emit=ast
