@@ -59,7 +59,11 @@ CGProcedure::addEmptyPhi(llvm::BasicBlock *BB, Decl *Decl) {
              ? llvm::PHINode::Create(mapType(Decl), 0, "",
                                      BB)
              : llvm::PHINode::Create(mapType(Decl), 0, "",
+#if __clang_major__ <= 17
                                      &BB->front());
+#else
+                                     BB->begin());
+#endif
 }
 
 llvm::Value *CGProcedure::addPhiOperands(
@@ -199,7 +203,11 @@ CGProcedure::createFunction(ProcedureDeclaration *Proc,
           CGM.getModule()->getDataLayout().getTypeStoreSize(
               CGM.convertType(FP->getType()));
       Attr.addDereferenceableAttr(Sz);
+#if __clang_major__ <= 17
       Attr.addAttribute(llvm::Attribute::NoCapture);
+#else
+      Attr.addAttribute(llvm::Attribute::Captures);  // temp solution
+#endif
       Arg.addAttrs(Attr);
     }
     Arg.setName(FP->getName());
@@ -374,7 +382,7 @@ void CGProcedure::emitStmt(WhileStatement *Stmt) {
   setCurr(WhileBodyBB);
   emit(Stmt->getWhileStmts());
   Builder.CreateBr(WhileCondBB);
-  sealBlock(WhileCondBB);  
+  sealBlock(WhileCondBB);
   sealBlock(Curr);
 
   setCurr(AfterWhileBB);

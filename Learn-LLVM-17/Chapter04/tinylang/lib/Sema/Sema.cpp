@@ -381,7 +381,12 @@ Expr *Sema::actOnPrefixExpression(Expr *E,
 Expr *Sema::actOnIntegerLiteral(SMLoc Loc,
                                 StringRef Literal) {
   uint8_t Radix = 10;
+
+#if __clang_major__ <= 17
   if (Literal.endswith("H")) {
+#else
+  if (Literal.ends_with("H")) {
+#endif
     Literal = Literal.drop_back();
     Radix = 16;
   }

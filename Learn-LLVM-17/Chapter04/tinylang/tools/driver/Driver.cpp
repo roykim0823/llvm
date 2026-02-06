@@ -16,6 +16,11 @@
 #include "llvm/Support/WithColor.h"
 #include "llvm/TargetParser/Host.h"
 
+#if __clang_major__ > 17
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#endif
+
 using namespace llvm;
 using namespace tinylang;
 
@@ -92,19 +97,35 @@ bool emit(StringRef Argv0, llvm::Module *M,
     if (InputFilename == "-") {
       OutputFilename = "-";
     } else {
+#if __clang_major__ <= 17
       if (InputFilename.endswith(".mod"))
+#else
+      if (InputFilename.ends_with(".mod"))
+#endif
         OutputFilename =
             InputFilename.drop_back(4).str();
       else
         OutputFilename = InputFilename.str();
       switch (FileType) {
+#if __clang_major__ <= 17
       case CGFT_AssemblyFile:
+#else
+      case llvm::CodeGenFileType::AssemblyFile:
+#endif
         OutputFilename.append(EmitLLVM ? ".ll" : ".s");
         break;
+#if __clang_major__ <= 17
       case CGFT_ObjectFile:
+#else
+      case llvm::CodeGenFileType::ObjectFile:
+#endif
         OutputFilename.append(".o");
         break;
+#if __clang_major__ <= 17
       case CGFT_Null:
+#else
+      case llvm::CodeGenFileType::Null:
+#endif
         OutputFilename.append(".null");
         break;
       }
@@ -114,7 +135,11 @@ bool emit(StringRef Argv0, llvm::Module *M,
   // Open the file.
   std::error_code EC;
   sys::fs::OpenFlags OpenFlags = sys::fs::OF_None;
+#if __clang_major__ <= 17
   if (FileType == CGFT_AssemblyFile)
+#else
+  if (FileType ==llvm::CodeGenFileType::AssemblyFile)
+#endif
     OpenFlags |= sys::fs::OF_TextWithCRLF;
   auto Out = std::make_unique<llvm::ToolOutputFile>(
       OutputFilename, EC, OpenFlags);
@@ -125,7 +150,11 @@ bool emit(StringRef Argv0, llvm::Module *M,
   }
 
   legacy::PassManager PM;
+#if __clang_major__ <= 17
   if (FileType == CGFT_AssemblyFile && EmitLLVM) {
+#else
+  if (FileType == llvm::CodeGenFileType::AssemblyFile && EmitLLVM) {
+#endif
     PM.add(createPrintModulePass(Out->os()));
   } else {
     if (TM->addPassesToEmitFile(PM, Out->os(), nullptr,
