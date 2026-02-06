@@ -1,6 +1,20 @@
 ﻿cmake_minimum_required (VERSION 3.20.0)
+# MUST come before project() to help find the right system paths
+# Set the macOS SDK path before project() initializes the toolchain
+if(APPLE)
+    # Automatically get the path to the current macOS SDK
+    execute_process(COMMAND xcrun --show-sdk-path
+                    OUTPUT_VARIABLE MACOS_SDK_PATH
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+    # Force CMake to use this SDK path for system headers
+    set(CMAKE_OSX_SYSROOT "${MACOS_SDK_PATH}" CACHE PATH "macOS SDK" FORCE)
+endif()
 
 project ("calc")
+
+set(CMAKE_C_COMPILER "clang")
+set(CMAKE_CXX_COMPILER "clang++")
 
 find_package(LLVM REQUIRED CONFIG)
 message("Found LLVM ${LLVM_PACKAGE_VERSION}, build type ${LLVM_BUILD_TYPE}")

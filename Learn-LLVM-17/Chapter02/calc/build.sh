@@ -1,6 +1,8 @@
 mkdir build
 cd build
-cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang ..
+# the 3rd argument to fix libc++ not found issue on macbook pro
+#cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_FLAGS="-isysroot $(xcrun --show-sdk-path)" ..
+cmake ..
 make
 ./src/calc "with a: a*3"
 ./src/calc "with a, b: a*3+b*2" | llc -filetype=obj -relocation-model=pic -o expr.o
