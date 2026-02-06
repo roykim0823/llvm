@@ -8,6 +8,7 @@ class DeclCheck : public ASTVisitor {
   llvm::StringSet<> Scope;
   bool HasError;
 
+  // This semantic analyzer only checks the variable is already declared
   enum ErrorType { Twice, Not };
 
   void error(ErrorType ET, llvm::StringRef V) {
@@ -24,6 +25,7 @@ public:
 
   virtual void visit(Factor &Node) override {
     if (Node.getKind() == Factor::Ident) {
+      // Check the variable is already declared.
       if (Scope.find(Node.getVal()) == Scope.end())
         error(Not, Node.getVal());
     }
@@ -42,7 +44,7 @@ public:
 
   virtual void visit(WithDecl &Node) override {
     for (auto I = Node.begin(), E = Node.end(); I != E; ++I) {
-      if (!Scope.insert(*I).second)
+      if (!Scope.insert(*I).second)  // Store the declared variable names, ".second" is bool
         error(Twice, *I);
     }
     if (Node.getExpr())

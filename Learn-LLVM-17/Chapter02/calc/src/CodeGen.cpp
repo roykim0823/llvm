@@ -16,8 +16,8 @@ class ToIRVisitor : public ASTVisitor {
   PointerType *PtrTy;
   Constant *Int32Zero;
 
-  Value *V;
-  StringMap<Value *> nameMap;
+  Value *V;  // the current calculated value
+  StringMap<Value *> nameMap;  // map a variable name to the value returned from the calc_read()
 
 public:
   ToIRVisitor(Module *M) : M(M), Builder(M->getContext()) {
@@ -28,17 +28,20 @@ public:
   }
 
   void run(AST *Tree) {
-    FunctionType *MainFty = FunctionType::get(
+    FunctionType *MainFty = FunctionType::get(  // function declaration
         Int32Ty, {Int32Ty, PtrTy}, false);
-    Function *MainFn = Function::Create(
+    Function *MainFn = Function::Create(        // function definition
         MainFty, GlobalValue::ExternalLinkage, "main", M);
+
+    // BasicBlock with "entry" label
     BasicBlock *BB = BasicBlock::Create(M->getContext(),
                                         "entry", MainFn);
-    Builder.SetInsertPoint(BB);
+    Builder.SetInsertPoint(BB);  // attach the BB to the IR Builder
 
     Tree->accept(*this);  // the tree traversal can begin here
                           // vist(WithDecl) will be called first
 
+    // Make function for the "calc_write", and call it
     FunctionType *CalcWriteFnTy =
         FunctionType::get(VoidTy, {Int32Ty}, false);
     Function *CalcWriteFn = Function::Create(
@@ -81,28 +84,31 @@ public:
   };
 
   virtual void visit(WithDecl &Node) override {
+    // Make function for the "calc_read"
     FunctionType *ReadFty =
         FunctionType::get(Int32Ty, {PtrTy}, false);
     Function *ReadFn = Function::Create(
         ReadFty, GlobalValue::ExternalLinkage, "calc_read",
         M);
-    
+
     // The method loops through the variable names
     for (auto I = Node.begin(), E = Node.end(); I != E;
          ++I) {
       StringRef Var = *I;
 
-      // Create call to calc_read function.
+
       Constant *StrText = ConstantDataArray::getString(
           M->getContext(), Var);
       GlobalVariable *Str = new GlobalVariable(
           *M, StrText->getType(),
           /*isConstant=*/true, GlobalValue::PrivateLinkage,
           StrText, Twine(Var).concat(".str"));
+
+      // Call "calc_read"
       CallInst *Call =
           Builder.CreateCall(ReadFty, ReadFn, {Str});
 
-      nameMap[Var] = Call;
+      nameMap[Var] = Call;  // the returned value is stored in nameMap
     }
 
     Node.getExpr()->accept(*this);
