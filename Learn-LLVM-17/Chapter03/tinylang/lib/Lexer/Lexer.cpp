@@ -87,26 +87,26 @@ void Lexer::next(Token &Result) {
       CASE(')', tok::r_paren);
 #undef CASE
     case '(':
-      if (*(CurPtr + 1) == '*') {
+      if (*(CurPtr + 1) == '*') { // '(*'
         comment();
         next(Result);
       } else
         formToken(Result, CurPtr + 1, tok::l_paren);
       break;
     case ':':
-      if (*(CurPtr + 1) == '=')
+      if (*(CurPtr + 1) == '=') // ':='
         formToken(Result, CurPtr + 2, tok::colonequal);
       else
         formToken(Result, CurPtr + 1, tok::colon);
       break;
     case '<':
-      if (*(CurPtr + 1) == '=')
+      if (*(CurPtr + 1) == '=') // '<='
         formToken(Result, CurPtr + 2, tok::lessequal);
       else
         formToken(Result, CurPtr + 1, tok::less);
       break;
     case '>':
-      if (*(CurPtr + 1) == '=')
+      if (*(CurPtr + 1) == '=') // '>='
         formToken(Result, CurPtr + 2, tok::greaterequal);
       else
         formToken(Result, CurPtr + 1, tok::greater);

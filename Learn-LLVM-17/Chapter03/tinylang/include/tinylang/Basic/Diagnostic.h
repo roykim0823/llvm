@@ -20,8 +20,7 @@ enum {
 
 class DiagnosticsEngine {
   static const char *getDiagnosticText(unsigned DiagID);
-  static SourceMgr::DiagKind
-  getDiagnosticKind(unsigned DiagID);
+  static SourceMgr::DiagKind getDiagnosticKind(unsigned DiagID);
 
   SourceMgr &SrcMgr;
   unsigned NumErrors;
