@@ -67,6 +67,7 @@ createTargetMachine(const char *Argv0) {
           ? llvm::Triple::normalize(MTriple)
           : llvm::sys::getDefaultTargetTriple());
 
+  // collect all the target info from the cmd line.
   llvm::TargetOptions TargetOptions =
       codegen::InitTargetOptionsFromCodeGenFlags(Triple);
   std::string CPUStr = codegen::getCPUStr();

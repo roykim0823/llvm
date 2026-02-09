@@ -24,21 +24,17 @@ class CGProcedure {
   llvm::Function *Fn;  // denote the current function
 
   struct BasicBlockDef {
-    // Maps the variable (or formal parameter) to its
-    // definition.
-    llvm::DenseMap<Decl *, llvm::TrackingVH<llvm::Value>>
-        Defs;
+    // Maps the variable (or formal parameter) to its definition.
+    llvm::DenseMap<Decl *, llvm::TrackingVH<llvm::Value>> Defs;
     // Set of incompleted phi instructions.
     llvm::DenseMap<llvm::PHINode *, Decl *> IncompletePhis;
-    // Block is sealed, that is, no more predecessors will
-    // be added.
+    // Block is sealed, that is, no more predecessors will be added.
     unsigned Sealed : 1;
 
     BasicBlockDef() : Sealed(0) {}
   };
 
-  llvm::DenseMap<llvm::BasicBlock *, BasicBlockDef>
-      CurrentDef;
+  llvm::DenseMap<llvm::BasicBlock *, BasicBlockDef> CurrentDef;
 
   void writeLocalVariable(llvm::BasicBlock *BB, Decl *Decl,
                           llvm::Value *Val);

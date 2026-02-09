@@ -5,6 +5,7 @@
 
 using namespace tinylang;
 
+// Store the current value of a local variable in a basic block
 void CGProcedure::writeLocalVariable(llvm::BasicBlock *BB,
                                      Decl *Decl,
                                      llvm::Value *Val) {
@@ -43,8 +44,7 @@ llvm::Value *CGProcedure::readLocalVariableRecursive(
     // Only one predecessor.
     Val = readLocalVariable(PredBB, Decl);
   } else {
-    // Create empty phi instruction to break potential
-    // cycles.
+    // Create empty phi instruction to break potential cycles.
     llvm::PHINode *Phi = addEmptyPhi(BB, Decl);
     writeLocalVariable(BB, Decl, Phi);
     Val = addPhiOperands(BB, Decl, Phi);
@@ -74,18 +74,22 @@ llvm::Value *CGProcedure::addPhiOperands(
   return optimizePhi(Phi);
 }
 
+// the phi instruction is often not interpreted by the algorithms
+// and thus hinders the optimization in general.
+// the fewer phi inst we generate, the better
 llvm::Value *CGProcedure::optimizePhi(llvm::PHINode *Phi) {
   llvm::Value *Same = nullptr;
   for (llvm::Value *V : Phi->incoming_values()) {
     if (V == Same || V == Phi)
       continue;
-    if (Same && V != Same)
+    if (Same && V != Same)  // two difference values
       return Phi;
     Same = V;
   }
-  if (Same == nullptr)
+  if (Same == nullptr) // no operands
     Same = llvm::UndefValue::get(Phi->getType());
-  // Collect phi instructions using this one.
+
+  // Collect phi instructions using this value and try to optimize them, too.
   llvm::SmallVector<llvm::PHINode *, 8> CandidatePhis;
   for (llvm::Use &U : Phi->uses()) {
     if (auto *P =
@@ -134,24 +138,21 @@ void CGProcedure::writeVariable(llvm::BasicBlock *BB,
 
 llvm::Value *CGProcedure::readVariable(llvm::BasicBlock *BB,
                                        Decl *D) {
-  if (auto *V = llvm::dyn_cast<VariableDeclaration>(D)) {
-    if (V->getEnclosingDecl() == Proc)
+  if (auto *V = llvm::dyn_cast<VariableDeclaration>(D)) {  // variales
+    if (V->getEnclosingDecl() == Proc) // local variable
       return readLocalVariable(BB, D);
     else if (V->getEnclosingDecl() ==
-             CGM.getModuleDeclaration()) {
+             CGM.getModuleDeclaration()) { // global variable by loading
       return Builder.CreateLoad(mapType(D),
                                 CGM.getGlobal(D));
     } else
       llvm::report_fatal_error(
           "Nested procedures not yet supported");
-  } else if (auto *FP =
-                 llvm::dyn_cast<FormalParameterDeclaration>(
-                     D)) {
-    if (FP->isVar()) {
-      return Builder.CreateLoad(mapType(FP, false),
-                                FormalParams[FP]);
+  } else if (auto *FP = llvm::dyn_cast<FormalParameterDeclaration>(D)) {  // parameters
+    if (FP->isVar()) { // passing by a reference
+      return Builder.CreateLoad(mapType(FP, false), FormalParams[FP]);
     } else
-      return readLocalVariable(BB, D);
+      return readLocalVariable(BB, D);  // passing by a value
   } else
     llvm::report_fatal_error("Unsupported declaration");
 }
@@ -160,7 +161,7 @@ llvm::Type *CGProcedure::mapType(Decl *Decl,
                                  bool HonorReference) {
   if (auto *FP = llvm::dyn_cast<FormalParameterDeclaration>(
           Decl)) {
-    if (FP->isVar() && HonorReference)
+    if (FP->isVar() && HonorReference) // passed by reference -> LLVM's pointer
       return llvm::PointerType::get(CGM.getLLVMCtx(),
                                     /*AddressSpace=*/0);
     return CGM.convertType(FP->getType());
@@ -192,7 +193,8 @@ CGProcedure::createFunction(ProcedureDeclaration *Proc,
   llvm::Function *Fn = llvm::Function::Create(
       Fty, llvm::GlobalValue::ExternalLinkage,
       CGM.mangleName(Proc), CGM.getModule());
-  // Give parameters a name.
+
+  // Give parameters a name and add attributes to the function and params
   for (auto Pair : llvm::enumerate(Fn->args())) {
     llvm::Argument &Arg = Pair.value();
     FormalParameterDeclaration *FP =
@@ -204,6 +206,9 @@ CGProcedure::createFunction(ProcedureDeclaration *Proc,
               CGM.convertType(FP->getType()));
       Attr.addDereferenceableAttr(Sz);
 #if __clang_major__ <= 17
+      // the pointer for the reference parameter cannot be passed around-
+      // there are no copies of the pointer that outlive the call to the
+      // function. -> not be captured!
       Attr.addAttribute(llvm::Attribute::NoCapture);
 #else
       Attr.addAttribute(llvm::Attribute::Captures);  // temp solution
@@ -379,13 +384,13 @@ void CGProcedure::emitStmt(WhileStatement *Stmt) {
   llvm::Value *Cond = emitExpr(Stmt->getCond());
   Builder.CreateCondBr(Cond, WhileBodyBB, AfterWhileBB);
 
-  setCurr(WhileBodyBB);
+  setCurr(WhileBodyBB);  // Generate the loop body
   emit(Stmt->getWhileStmts());
-  Builder.CreateBr(WhileCondBB);
+  Builder.CreateBr(WhileCondBB);  // add a branch back to the basic block of the condition
   sealBlock(WhileCondBB);
   sealBlock(Curr);
 
-  setCurr(AfterWhileBB);
+  setCurr(AfterWhileBB);  // The emtpy basic block for stateemnt following WHILE becomes the new current basic block
 }
 
 void CGProcedure::emitStmt(ReturnStatement *Stmt) {
@@ -449,7 +454,7 @@ void CGProcedure::run(ProcedureDeclaration *Proc) {
   auto Block = Proc->getStmts();
   emit(Proc->getStmts());
   if (!Curr->getTerminator()) {
-    Builder.CreateRetVoid();
+    Builder.CreateRetVoid();  // to handle an implicit return
   }
   sealBlock(Curr);
 }
