@@ -28,7 +28,11 @@ CodeGenerator *CodeGenerator::create(llvm::LLVMContext &Ctx, ASTContext &ASTCtx,
 
 std::unique_ptr<llvm::Module> CodeGenerator::run(ModuleDeclaration *Mod, std::string FileName) {
   std::unique_ptr<llvm::Module> M = std::make_unique<llvm::Module>(FileName, Ctx);
+#if __clang_major__ <= 17
   M->setTargetTriple(TM->getTargetTriple().getTriple());
+#else
+  M->setTargetTriple(llvm::Triple(TM->getTargetTriple().getTriple()));
+#endif
   M->setDataLayout(TM->createDataLayout());
   CGModule CGM(ASTCtx, M.get());
   CGM.run(Mod);
