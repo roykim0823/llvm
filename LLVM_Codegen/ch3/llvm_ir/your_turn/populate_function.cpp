@@ -57,4 +57,76 @@ using namespace llvm;
 //
 // declare void @bar(i32)
 // declare i32 @baz(...)
-std::unique_ptr<Module> myBuildModule(LLVMContext &Ctxt) { return nullptr; }
+std::unique_ptr<Module> myBuildModule(LLVMContext &Ctxt) {
+  // Create the types
+  Type *Int32Ty = Type::getInt32Ty(Ctxt);
+  Type *VoidTy = Type::getVoidTy(Ctxt);
+  // Type *PtrTy = PointerType::get(Ctxt, /*AddrSpace=*/0);  // not necessary?
+
+  // Create llvm::Module
+  std::unique_ptr<Module> MyModule =
+      std::make_unique<Module>("My Module", Ctxt);
+
+  // Populate all the functions (declaration for now.)
+  // baz()
+  FunctionType *BazTy = FunctionType::get(Int32Ty, /*ArgsTy*/ false);
+  Function *BazFunc =
+      cast<Function>(MyModule->getOrInsertFunction("baz", BazTy).getCallee());
+
+  // bar(int)
+  FunctionType *BarTy = FunctionType::get(VoidTy, ArrayRef(Int32Ty), /*isVarArg=*/false);
+  Function *BarFunc =
+      cast<Function>(MyModule->getOrInsertFunction("bar", BarTy).getCallee());
+
+  // foo(int, int)
+  FunctionType *FooTy = FunctionType::get(VoidTy, ArrayRef({Int32Ty, Int32Ty}), false);
+  Function *FooFunc =
+      cast<Function>(MyModule->getOrInsertFunction("foo", FooTy).getCallee());
+
+  // Create BasicBlocks for foo
+  BasicBlock *BB = BasicBlock::Create(Ctxt, "bb", FooFunc);
+  BasicBlock *BB9 = BasicBlock::Create(Ctxt, "bb9", FooFunc);
+  BasicBlock *BB12 = BasicBlock::Create(Ctxt, "bb12", FooFunc);
+
+  // Populate the first BasicBlock
+  IRBuilder<> Builder(BB);
+  // Allocate space for local variables
+  Value *I = Builder.CreateAlloca(Int32Ty);
+  Value *I2 = Builder.CreateAlloca(Int32Ty);
+  Value *I3 = Builder.CreateAlloca(Int32Ty);
+
+  // Store the arguments into local variables
+  Builder.CreateStore(FooFunc->getArg(0), I);
+  Builder.CreateStore(FooFunc->getArg(1), I2);
+
+  // Load and add the values
+  Value *I4 = Builder.CreateLoad(Int32Ty, I);
+  Value *I5 = Builder.CreateLoad(Int32Ty, I2);
+  Value *I6 = Builder.CreateAdd(I4, I5);
+  Builder.CreateStore(I6, I3);
+
+  // Compare with constant value (0xFF)
+  Value *Const255 = ConstantInt::get(Int32Ty, 0xFF);
+  Value *I7 = Builder.CreateLoad(Int32Ty, I3);
+  Value *I8 = Builder.CreateICmpEQ(I7, Const255);
+
+  // Branch based on comparison
+  Builder.CreateCondBr(I8, BB9, BB12);
+  // --------------------------------------------------------------
+
+  // Populate BB9
+  Builder.SetInsertPoint(BB9);
+  Value *I10 = Builder.CreateLoad(Int32Ty, I3);
+  Builder.CreateCall(BarFunc->getFunctionType(), BarFunc, ArrayRef(I10));
+  Value *I11 = Builder.CreateCall(BazFunc->getFunctionType(), BazFunc);
+  Builder.CreateStore(I11, I3);
+  Builder.CreateBr(BB12);
+
+  // Populate BB12
+  Builder.SetInsertPoint(BB12);
+  Value *I13 = Builder.CreateLoad(Int32Ty, I3);
+  Builder.CreateCall(BarFunc->getFunctionType(), BarFunc, ArrayRef(I13));
+  Builder.CreateRetVoid();
+
+  return MyModule;
+}
