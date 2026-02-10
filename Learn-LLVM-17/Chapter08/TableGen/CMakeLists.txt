@@ -3,12 +3,23 @@ cmake_minimum_required (VERSION 3.20.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+
+# Use locally build LLVM17
+# Define the path to your local LLVM build/install directory
+set(LLVM_LOCAL_PATH "/Users/roy/llvm-project/llvm17")
+set(CMAKE_C_COMPILER "${LLVM_LOCAL_PATH}/bin/clang")
+set(CMAKE_CXX_COMPILER "${LLVM_LOCAL_PATH}/bin/clang++")
+
+# Use HINTS or PATHS to force CMake to look at your local build first.
+# We also use CONFIG mode to ensure it finds LLVMConfig.cmake
+# NO_DEFAULT_PATH ensures it doesn't accidentally fallback to the system LLVM
+# --- MODIFICATION END ---
+
 project ("tablegen")
 
-# Locate LLVM
-find_package(LLVM REQUIRED CONFIG)
-message("Found LLVM ${LLVM_PACKAGE_VERSION}, build type ${LLVM_BUILD_TYPE}")
-list(APPEND CMAKE_MODULE_PATH ${LLVM_DIR})
+find_package(LLVM REQUIRED CONFIG
+             PATHS "${LLVM_LOCAL_PATH}"
+             NO_DEFAULT_PATH)
 
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
