@@ -35,6 +35,19 @@ MachineFunction *populateMachineIR(MachineModuleInfo &MMI, Function &Foo,
                                    Register W0, Register W1) {
   MachineFunction &MF = MMI.getOrCreateMachineFunction(Foo);
 
+  // Create the 3 basic blocks that compose Foo.
+  MachineBasicBlock *EntryBB = MF.CreateMachineBasicBlock();
+  MF.push_back(EntryBB);
+  MachineBasicBlock *ThenBB = MF.CreateMachineBasicBlock();
+  MF.push_back(ThenBB);
+  MachineBasicBlock *ExitBB = MF.CreateMachineBasicBlock();
+  MF.push_back(ExitBB);
+
+  // Create the configuration of the CFG.
+  EntryBB->addSuccessor(ThenBB);
+  EntryBB->addSuccessor(ExitBB);
+  ThenBB->addSuccessor(ExitBB);
+
   // The type for bool.
   LLT I1 = LLT::scalar(1);
   // The type of var.
@@ -51,6 +64,71 @@ MachineFunction *populateMachineIR(MachineModuleInfo &MMI, Function &Foo,
   int FrameIndex = MF.getFrameInfo().CreateStackObject(32, VarStackAlign,
                                                        /*IsSpillSlot=*/false);
 
-  // TODO: Populate MF.
+  // Populate EntryBB
+  MachineIRBuilder MIBuilder(*EntryBB, EntryBB->end());
+  // Get the two arguments a and b from W0 and W1.
+  Register A = MIBuilder.buildCopy(I32, W0).getReg(0);
+  Register B = MIBuilder.buildCopy(I32, W1).getReg(0);
+  // Get the stack slot for var.
+  Register VarStackAddr =
+      MIBuilder.buildFrameIndex(VarAddrLLT, FrameIndex).getReg(0);
+  // Add a and b.
+  Register Sum = MIBuilder.buildAdd(I32, A, B).getReg(0);
+  // Store the result in var.
+  MIBuilder.buildStore(Sum, VarStackAddr, PtrInfo, VarStackAlign);
+  // Load var to compare it with 0xFF.
+  Register VarLoaded =
+      MIBuilder.buildLoad(I32, VarStackAddr, PtrInfo, VarStackAlign).getReg(0);
+  // Create constant 0xFF.
+  Register Cst0xFF = MIBuilder.buildConstant(I32, 0xFF).getReg(0);
+  // Compare var and 0xFF.
+  Register Cmp = MIBuilder.buildICmp(ICmpInst::ICMP_EQ, I1, VarLoaded, Cst0xFF)
+                     .getReg(0);
+  // Create the conditional branch.
+  MIBuilder.buildBrCond(Cmp, *ThenBB);
+  // Otherwise jump to ExitBB;
+  MIBuilder.buildBr(*ExitBB);
+
+  // Populate ThenBB
+  // Reset MIBuilder to point at the end of ThenBB.
+  MIBuilder.setInsertPt(*ThenBB, ThenBB->end());
+  // Load var to pass it to bar.
+  Register VarForBar1 =
+      MIBuilder.buildLoad(I32, VarStackAddr, PtrInfo, VarStackAlign).getReg(0);
+  // Move var into W0 for the call to bar.
+  MIBuilder.buildCopy(W0, VarForBar1);
+  // Fake call to bar.
+  MIBuilder.buildInstr(TargetOpcode::INLINEASM, {}, {})
+      .addExternalSymbol("bl @bar")
+      .addImm(0)
+      .addReg(W0, RegState::Implicit);
+  // Fake call to baz.
+  MIBuilder.buildInstr(TargetOpcode::INLINEASM, {}, {})
+      .addExternalSymbol("bl @baz")
+      .addImm(0)
+      .addReg(W0, RegState::Implicit | RegState::Define);
+  // Store the result of baz into var.
+  Register BazResult = MIBuilder.buildCopy(I32, W0).getReg(0);
+  MIBuilder.buildStore(BazResult, VarStackAddr, PtrInfo, VarStackAlign);
+  // Fall through to ExitBB, no need to for a terminator.
+
+  // Populate ExitBB
+  // Reset MIBuilder to point at the end of ExitBB.
+  MIBuilder.setInsertPt(*ExitBB, ExitBB->end());
+  // Load var to pass it to bar.
+  Register VarForBar2 =
+      MIBuilder.buildLoad(I32, VarStackAddr, PtrInfo, VarStackAlign).getReg(0);
+  // Move var into W0 for the call to bar.
+  MIBuilder.buildCopy(W0, VarForBar2);
+  // Fake call to bar.
+  MIBuilder.buildInstr(TargetOpcode::INLINEASM, {}, {})
+      .addExternalSymbol("bl @bar")
+      .addImm(0)
+      .addReg(W0, RegState::Implicit);
+  // End of the function, return void;
+  MIBuilder.buildInstr(TargetOpcode::INLINEASM, {}, {})
+      .addExternalSymbol("ret")
+      .addImm(0);
+
   return &MF;
 }
