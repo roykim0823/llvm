@@ -38,7 +38,7 @@ include(AddLLVM)
 
 # 2. Add MLIR's include directories and definitions
 include_directories(${MLIR_INCLUDE_DIRS}
-                    ${LLVM_INCLUDE_DIRS}ß
+                    ${LLVM_INCLUDE_DIRS}
                     include/)
 add_definitions(${LLVM_DEFINITIONS})
 
