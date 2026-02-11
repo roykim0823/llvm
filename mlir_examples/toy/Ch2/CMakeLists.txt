@@ -53,7 +53,9 @@ add_executable(toyc-ch2
   )
 add_dependencies(toyc-ch2 ToyCh2OpsIncGen)
 # Crucial: Apply LLVM's flags (like -fno-rtti) to your target
-llvm_update_compile_flags(toyc-ch2)
+#llvm_update_compile_flags(toyc-ch2)
+
+# Sync visibility settings with LLVM to stop the 'weak symbol' warnings
 
 #include_directories(include/)
 #include_directories(${CMAKE_CURRENT_BINARY_DIR}/include/)
@@ -65,3 +67,6 @@ target_link_libraries(toyc-ch2
     MLIRParser
     MLIRSideEffectInterfaces
     MLIRTransforms)
+
+# Tell the Apple linker: "I know about the weak symbol visibility, just be quiet."
+target_link_options(toyc-ch2 PRIVATE "-Wl,-w")
