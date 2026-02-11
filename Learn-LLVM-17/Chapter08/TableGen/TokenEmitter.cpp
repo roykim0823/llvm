@@ -131,11 +131,12 @@ void TokenAndKeywordFilterEmitter::emitKeywordFilter(
           "TokenFilter");
   if (AllTokenFilter.empty())
     return;
+
   ListInit *TokenFilter = dyn_cast_or_null<ListInit>(
       AllTokenFilter[0]
-          ->getValue("Tokens")
+          ->getValue("Tokens")  // Tikons's type if list<Token>
           ->getValue());
-  if (!TokenFilter)
+  if (!TokenFilter)  // no tokens defined
     return;
 
   // Collect the keyword/flag values.
