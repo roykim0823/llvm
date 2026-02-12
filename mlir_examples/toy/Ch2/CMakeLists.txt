@@ -1,18 +1,5 @@
 # For a better template to copy, see examples/standalone
 cmake_minimum_required(VERSION 3.15)
-
-# MUST come before project() to help find the right system paths
-# Set the macOS SDK path before project() initializes the toolchain
-if(APPLE)
-    # Automatically get the path to the current macOS SDK
-    execute_process(COMMAND xcrun --show-sdk-path
-                    OUTPUT_VARIABLE MACOS_SDK_PATH
-                    OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-    # Force CMake to use this SDK path for system headers
-    set(CMAKE_OSX_SYSROOT "${MACOS_SDK_PATH}" CACHE PATH "macOS SDK" FORCE)
-endif()
-
 project(toy-ch2)
 
 # 1. Find the packages FIRST
@@ -30,10 +17,6 @@ include(AddMLIR)
 # 4. NOW you can enter the subdirectory because the commands are defined
 include_directories(${MLIR_INCLUDE_DIRS}
                     ${LLVM_INCLUDE_DIRS})
-
-
-# Tell the Apple linker: "I know about the weak symbol visibility, just be quiet."
-#target_link_options(toyc-ch2 PRIVATE "-Wl,-w")
 
 # --------------------------------------------------------
 # The original CMakeLists.txt had the following structure,
