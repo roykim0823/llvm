@@ -3,28 +3,28 @@ cmake_minimum_required (VERSION 3.20.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-
-# Use locally build LLVM17
-# Define the path to your local LLVM build/install directory
-set(LLVM_LOCAL_PATH "/Users/roy/llvm-project/llvm17")
-set(CMAKE_C_COMPILER "${LLVM_LOCAL_PATH}/bin/clang")
-set(CMAKE_CXX_COMPILER "${LLVM_LOCAL_PATH}/bin/clang++")
-
-# Use HINTS or PATHS to force CMake to look at your local build first.
-# We also use CONFIG mode to ensure it finds LLVMConfig.cmake
-# NO_DEFAULT_PATH ensures it doesn't accidentally fallback to the system LLVM
-# --- MODIFICATION END ---
+if(APPLE)  # macOS system installed llvm is 21.1.8, Ubuntu installed llvm 17
+  set(CMAKE_C_COMPILER "/Users/roy/llvm-project/llvm17/bin/clang")
+  set(CMAKE_CXX_COMPILER "/Users/roy/llvm-project/llvm17/bin/clang++")
+endif()
 
 project ("tablegen")
 
-find_package(LLVM REQUIRED CONFIG
-             PATHS "${LLVM_LOCAL_PATH}"
-             NO_DEFAULT_PATH)
+if(APPLE)
+  # Add this BEFORE find_package
+  set(LLVM_DIR "/Users/roy/llvm-project/llvm17/lib/cmake/llvm" CACHE PATH "Path to LLVM config")
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0" CACHE STRING "Match local LLVM target" FORCE)
+endif()
+
+# Locate LLVM
+find_package(LLVM REQUIRED CONFIG)
+message("Found LLVM ${LLVM_PACKAGE_VERSION}, build type ${LLVM_BUILD_TYPE}")
+list(APPEND CMAKE_MODULE_PATH ${LLVM_DIR})
 
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
-llvm_map_components_to_libnames(llvm_libs support tablegen)
+llvm_map_components_to_libnames(llvm_libs tablegen)
 
 include(DetermineGCCCompatible)
 if(MSVC)

@@ -1,5 +1,5 @@
 mkdir build
 cd build
-cmake -DCMAKE_CXX_COMPILER=clang++ ..
-make
+cmake .. -G Ninja
+ninja
 ./tools/driver/tinylang ../example/Gcd.mod
