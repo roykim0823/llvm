@@ -1,5 +1,6 @@
 # For a better template to copy, see examples/standalone
 cmake_minimum_required(VERSION 3.15)
+
 # MUST come before project() to help find the right system paths
 # Set the macOS SDK path before project() initializes the toolchain
 if(APPLE)
@@ -25,16 +26,19 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 # 3. Include the macros that define 'mlir_tablegen' and 'add_toy_chapter'
 include(AddLLVM)
 include(AddMLIR)
-include(TableGen)
 
 # 4. NOW you can enter the subdirectory because the commands are defined
-
 include_directories(${MLIR_INCLUDE_DIRS}
-                    ${LLVM_INCLUDE_DIRS}
-                    include/)
-include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
-add_definitions(${LLVM_DEFINITIONS})
+                    ${LLVM_INCLUDE_DIRS})
 
+
+# Tell the Apple linker: "I know about the weak symbol visibility, just be quiet."
+#target_link_options(toyc-ch2 PRIVATE "-Wl,-w")
+
+# --------------------------------------------------------
+# The original CMakeLists.txt had the following structure,
+# Unnecessary statements have been commented out.
+# -------------------------------------------------------- 
 add_subdirectory(include)
 
 set(LLVM_LINK_COMPONENTS
@@ -51,22 +55,17 @@ add_executable(toyc-ch2
   # ToyCh2OpsIncGen
 
   )
-add_dependencies(toyc-ch2 ToyCh2OpsIncGen)
-# Crucial: Apply LLVM's flags (like -fno-rtti) to your target
-#llvm_update_compile_flags(toyc-ch2)
 
-# Sync visibility settings with LLVM to stop the 'weak symbol' warnings
+add_dependencies(toyc-ch2 ToyCh2OpsIncGen)  # Added to fix include dependency for toy/Dialect.h.inc
 
-#include_directories(include/)
-#include_directories(${CMAKE_CURRENT_BINARY_DIR}/include/)
+include_directories(include/)
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/include/)
 target_link_libraries(toyc-ch2
   PRIVATE
-    MLIRAnalysis
-    MLIRFunctionInterfaces
-    MLIRIR
+    #MLIRAnalysis
+    #MLIRFunctionInterfaces
+    #MLIRIR
     MLIRParser
-    MLIRSideEffectInterfaces
-    MLIRTransforms)
-
-# Tell the Apple linker: "I know about the weak symbol visibility, just be quiet."
-target_link_options(toyc-ch2 PRIVATE "-Wl,-w")
+    #MLIRSideEffectInterfaces
+    MLIRTransforms
+)
