@@ -1,5 +1,4 @@
-﻿cmake_minimum_required (VERSION 3.8)
-
+﻿cmake_minimum_required (VERSION 3.20)
 project ("calc")
 
 include(CheckIncludeFile)
@@ -11,7 +10,9 @@ find_package(LLVM REQUIRED CONFIG)
 message("Found LLVM ${LLVM_PACKAGE_VERSION}, build type ${LLVM_BUILD_TYPE}")
 list(APPEND CMAKE_MODULE_PATH ${LLVM_DIR})
 include(DetermineGCCCompatible)
-include(ChooseMSVCCRT)
+if(NOT APPLE)
+  include(ChooseMSVCCRT)
+endif()
 
 add_definitions(${LLVM_DEFINITIONS})
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})

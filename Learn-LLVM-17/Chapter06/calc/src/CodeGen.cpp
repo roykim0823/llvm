@@ -2,6 +2,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -33,12 +34,17 @@ class ToIRVisitor : public ASTVisitor {
 public:
   ToIRVisitor(Module *M) : M(M), Builder(M->getContext()) {
     VoidTy = Type::getVoidTy(M->getContext());
-    Int8Ty = Type::getInt8Ty(M->getContext());
-    Int32Ty = Type::getInt32Ty(M->getContext());
-    Int64Ty = Type::getInt64Ty(M->getContext());
-    Int8PtrTy = PointerType::get(Int8Ty, 0);
-    Int32PtrTy = Type::getInt32PtrTy(M->getContext());
-    Int8PtrPtrTy = Int8PtrTy->getPointerTo();
+    //Int8Ty = Type::getInt8Ty(M->getContext());
+    //Int32Ty = Type::getInt32Ty(M->getContext());
+    //Int64Ty = Type::getInt64Ty(M->getContext());
+    Int8Ty = IntegerType::get(M->getContext(), 8);  // Use IntegerType::get in llvm21
+    Int32Ty = IntegerType::get(M->getContext(), 32);
+    Int64Ty = IntegerType::get(M->getContext(), 64);
+    Int8PtrTy = PointerType::get(M->getContext(), 0);
+    //Int32PtrTy = Type::getInt32PtrTy(M->getContext());
+    Int32PtrTy = PointerType::get(M->getContext(), 0);
+    //Int8PtrPtrTy = Int8PtrTy->getPointerTo();
+    Int8PtrPtrTy = PointerType::get(M->getContext(), 0);
     Int32Zero = ConstantInt::get(Int32Ty, 0, true);
 
     TypeInfo = nullptr;
@@ -112,7 +118,9 @@ public:
 
       // Create call to calc_read function.
       Value *Ptr =
-          Builder.CreateGlobalStringPtr(Var, Twine(Var).concat(".str"), 0, M);
+      //    Builder.CreateGlobalStringPtr(Var, Twine(Var).concat(".str"), 0, M);
+            Builder.CreateGlobalString(
+              Var, Twine(Var).concat(".str"), /*AddrSpace=*/0, M);  // llvm21
       CallInst *Call = Builder.CreateCall(ReadFty, ReadFn, {Ptr});
 
       nameMap[Var] = Call;
@@ -132,7 +140,8 @@ public:
   }
 
   void createFunc(FunctionType *&Fty, Function *&Fn, const Twine &N,
-                  Type *Result, ArrayRef<Type *> Params = std::nullopt,
+                  // Type *Result, ArrayRef<Type *> Params = std::nullopt,
+                  Type *Result, ArrayRef<Type *> Params = {},  // llvm21
                   bool IsVarArgs = false) {
     Fty = FunctionType::get(Result, Params, IsVarArgs);
     Fn = Function::Create(Fty, GlobalValue::ExternalLinkage, N, M);
@@ -156,7 +165,7 @@ public:
       // Declare personality function.
       FunctionType *PersFty;
       Function *PersFn;
-      createFunc(PersFty, PersFn, "__gxx_personality_v0", Int32Ty, std::nullopt, true);
+      createFunc(PersFty, PersFn, "__gxx_personality_v0", Int32Ty, {}, true);  // llvm21
 
       // Attach personality function to main()
       Function *Fn = Builder.GetInsertBlock()->getParent();
@@ -230,7 +239,9 @@ public:
     Builder.CreateCall(BeginCatchFty, BeginCatchFn, {Ptr});
 
     Value *MsgPtr =
-        Builder.CreateGlobalStringPtr("Divide by zero!", "msg", 0, M);
+    //    Builder.CreateGlobalStringPtr("Divide by zero!", "msg", 0, M);
+        Builder.CreateGlobalString(
+            "Divide by zero!", "msg", /*AddrSpace=*/0, M);  // llvm21
     Builder.CreateCall(PutsFty, PutsFn, {MsgPtr});
     Builder.CreateCall(EndCatchFty, EndCatchFn);
     Builder.CreateRet(Int32Zero);

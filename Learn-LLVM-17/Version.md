@@ -6,8 +6,17 @@ LLVM version: 21.1.8
 
 - Chapter02: O
 - Chapter03: with `#if __clang_major__` macro
-- Chapter04: with `#if __clang_major__` macro
-- Chapter05: with `#if __clang_major__` macro
+- Chapter04: with `#if __clang_major__` macro and below
+```
+./tools/driver/Driver.cpp:      Triple, CPUStr, FeatureStr, TargetOptions,  // Triple.getTriple() -> Triple in llvm21
+```
+- Chapter05: with `#if __clang_major__` macro and below
+```
+./lib/CodeGen/CGProcedure.cpp:          llvm::PointerType::get(mapType(FP)->getContext(), 0),  // Use PointerType::get in llvm21
+./lib/CodeGen/CGProcedure.cpp:      // Ty = llvm::PointerType::get(Ty->getContext(), 0);  // Use PointerType::get in llvm21
+./lib/CodeGen/CGProcedure.cpp:      Ty = llvm::PointerType::getUnqual(Ty->getContext());  // Use PointerType::getUnqual in llvm21, alternative way
+./tools/driver/Driver.cpp:      Triple, CPUStr, FeatureStr, TargetOptions,  // Triple.getTriple() -> Triple in llvm21
+```
 - Chapter06: ?
 - Chapter07: ?
 - Chapter08: with the following changes,

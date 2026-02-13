@@ -156,7 +156,7 @@ llvm::Value *CGProcedure::readVariable(llvm::BasicBlock *BB,
       if (!LoadVal)
         return FormalParams[FP];
       return Builder.CreateLoad(
-          mapType(FP)->getPointerTo(),
+          llvm::PointerType::get(mapType(FP)->getContext(), 0),  // Use PointerType::get in llvm21
           FormalParams[FP]);
     } else
       return readLocalVariable(BB, D);
@@ -169,7 +169,9 @@ llvm::Type *CGProcedure::mapType(Decl *Decl) {
           Decl)) {
     llvm::Type *Ty = CGM.convertType(FP->getType());
     if (FP->isVar())
-      Ty = Ty->getPointerTo();
+      // Ty = Ty->getPointerTo();
+      // Ty = llvm::PointerType::get(Ty->getContext(), 0);  // Use PointerType::get in llvm21
+      Ty = llvm::PointerType::getUnqual(Ty->getContext());  // Use PointerType::getUnqual in llvm21, alternative way
     return Ty;
   }
   if (auto *V = llvm::dyn_cast<VariableDeclaration>(Decl))
@@ -305,15 +307,15 @@ llvm::Value *CGProcedure::emitExpr(Expr *E) {
     return emitPrefixExpr(Prefix);
   } else if (auto *Var = llvm::dyn_cast<Designator>(E)) {
     auto *Decl = Var->getDecl();
-    llvm::Value *Val = readVariable(Curr, Decl);
+    llvm::Value *Val = readVariable(Curr, Decl);  // 1. Read the value of the variable
     // With more languages features in place, here you
     // need to add array and record support.
-    auto &Selectors = Var->getSelectors();
+    auto &Selectors = Var->getSelectors();  // 2. Get the selectors of the variable
     for (auto I = Selectors.begin(), E = Selectors.end();
          I != E;
          /* no increment */) {
       if (auto *IdxSel =
-              llvm::dyn_cast<IndexSelector>(*I)) {
+              llvm::dyn_cast<IndexSelector>(*I)) {  // 3. Each Index, the expression is evaluated
         llvm::SmallVector<llvm::Value *, 4> IdxList;
         while (I != E) {
           if (auto *Sel =
@@ -324,7 +326,7 @@ llvm::Value *CGProcedure::emitExpr(Expr *E) {
             break;
         }
         Val = Builder.CreateInBoundsGEP(Val->getType(), Val, IdxList);
-        Val = Builder.CreateLoad(
+        Val = Builder.CreateLoad(  // 4. Load the value from the computed address
             Val->getType(), Val);
       } else if (auto *FieldSel =
                      llvm::dyn_cast<FieldSelector>(*I)) {
@@ -371,11 +373,13 @@ llvm::Value *CGProcedure::emitExpr(Expr *E) {
 
 void CGProcedure::emitStmt(AssignmentStatement *Stmt) {
   auto *Val = emitExpr(Stmt->getExpr());
-  Designator *Desig = Stmt->getVar();
-  auto &Selectors = Desig->getSelectors();
+  Designator *Desig = Stmt->getVar();       // 1. Read the value of the variable
+  auto &Selectors = Desig->getSelectors();  // 2. Get the selectors of the variable
   if (Selectors.empty())
     writeVariable(Curr, Desig->getDecl(), Val);
   else {
+    // With more language features in place, here
+    // you need to add array and record support.
     llvm::SmallVector<llvm::Value *, 4> IdxList;
     // First index for GEP.
     IdxList.push_back(
@@ -386,7 +390,7 @@ void CGProcedure::emitStmt(AssignmentStatement *Stmt) {
          I != E; ++I) {
       if (auto *IdxSel =
               llvm::dyn_cast<IndexSelector>(*I)) {
-        IdxList.push_back(emitExpr(IdxSel->getIndex()));
+        IdxList.push_back(emitExpr(IdxSel->getIndex()));  // 3. Each Index, the expression is evaluated
       } else if (auto *FieldSel =
                      llvm::dyn_cast<FieldSelector>(*I)) {
         llvm::Value *V = llvm::ConstantInt::get(
@@ -400,7 +404,7 @@ void CGProcedure::emitStmt(AssignmentStatement *Stmt) {
       if (Base->getType()->isPointerTy()) {
         Base = Builder.CreateInBoundsGEP(
             mapType(Desig->getDecl()), Base, IdxList);
-        Builder.CreateStore(Val, Base);
+        Builder.CreateStore(Val, Base);  // 4. Write the value to the computed address
       } else {
         llvm::report_fatal_error("should not happen");
       }
@@ -525,6 +529,7 @@ void CGProcedure::run(ProcedureDeclaration *Proc) {
     writeLocalVariable(Curr, FP, Arg);
   }
 
+  // Allocate local variables including aggregates.
   for (auto *D : Proc->getDecls()) {
     if (auto *Var =
             llvm::dyn_cast<VariableDeclaration>(D)) {
