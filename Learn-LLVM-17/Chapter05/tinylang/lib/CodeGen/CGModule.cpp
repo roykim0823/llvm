@@ -54,6 +54,8 @@ llvm::Type *CGModule::convertType(TypeDeclaration *Ty) {
             .getZExtValue();
     llvm::Type *T =
         llvm::ArrayType::get(Component, NumElements);
+    // TypeCache is a mapping between the original
+    // TypeDeclaration (Ty) and the current Type(T)
     return TypeCache[Ty] = T;
   } else if (auto *RecordTy =
                  llvm ::dyn_cast<RecordTypeDeclaration>(
