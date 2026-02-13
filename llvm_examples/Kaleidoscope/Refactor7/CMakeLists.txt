@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 1. Find the LLVM package
-# If your LLVM is in a custom path, run cmake with: 
+# If your LLVM is in a custom path, run cmake with:
 # -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm
 find_package(LLVM REQUIRED CONFIG)
 

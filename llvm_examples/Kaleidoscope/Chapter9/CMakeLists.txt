@@ -1,14 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
-
-set(CMAKE_C_COMPILER "clang")
-set(CMAKE_CXX_COMPILER "clang++")
-
 project(LLVMToy)
 
-
 # 1. Find the LLVM package
-# If your LLVM is in a custom path, run cmake with: 
-# -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm
 find_package(LLVM REQUIRED CONFIG)
 
 # 2. Add the LLVM headers and definitions

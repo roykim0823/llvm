@@ -1,20 +1,17 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.20)
 project(Kaleidoscope)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 1. Find the LLVM package
-# If your LLVM is in a custom path, run cmake with: 
-# -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm
 find_package(LLVM REQUIRED CONFIG)
 
 # 2. Add the LLVM headers and definitions
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
-
-# 4. Map the components to libraries
+# 3. Map the components to libraries
 # The 'core' in your command corresponds to the LLVMCore component
 llvm_map_components_to_libnames(llvm_libs core orcjit native)
 
