@@ -3,20 +3,8 @@ cmake_minimum_required (VERSION 3.20.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(APPLE)  # macOS system installed llvm is 21.1.8, Ubuntu installed llvm 17
-  set(CMAKE_C_COMPILER "/Users/roy/llvm-project/llvm17/bin/clang")
-  set(CMAKE_CXX_COMPILER "/Users/roy/llvm-project/llvm17/bin/clang++")
-endif()
-
 project ("tablegen")
 
-if(APPLE)
-  # Add this BEFORE find_package
-  set(LLVM_DIR "/Users/roy/llvm-project/llvm17/lib/cmake/llvm" CACHE PATH "Path to LLVM config")
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0" CACHE STRING "Match local LLVM target" FORCE)
-endif()
-
-# Locate LLVM
 find_package(LLVM REQUIRED CONFIG)
 message("Found LLVM ${LLVM_PACKAGE_VERSION}, build type ${LLVM_BUILD_TYPE}")
 list(APPEND CMAKE_MODULE_PATH ${LLVM_DIR})

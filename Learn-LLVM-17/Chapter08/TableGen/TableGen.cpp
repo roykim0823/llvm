@@ -28,16 +28,16 @@ cl::opt<ActionType> Action(
                    "Generate token kinds and keyword "
                    "filter")));
 
-bool Main(raw_ostream &OS, RecordKeeper &Records) {
+bool Main(raw_ostream &OS, const RecordKeeper &Records) {  // const RecordKeeper & in llvm21
   switch (Action) {
   case PrintRecords:
     OS << Records; // No argument, dump all contents
     break;
   case DumpJSON:
-    EmitJSON(Records, OS);
+    EmitJSON(const_cast<RecordKeeper &>(Records), OS);
     break;
   case GenTokens:
-    EmitTokensAndKeywordFilter(Records, OS);
+    EmitTokensAndKeywordFilter(const_cast<RecordKeeper &>(Records), OS);
     break;
   }
 
@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
   PrettyStackTraceProgram X(argc, argv);
   cl::ParseCommandLineOptions(argc, argv);
 
-  llvm_shutdown_obj Y;
+  // llvm_shutdown_obj Y;  // Automatically call llvm_shutdown() on exit in llvm21
 
   return TableGenMain(argv[0], &Main);
 }
