@@ -1,11 +1,11 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.20)
 project(Kaleidoscope)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 1. Find the LLVM package
-# If your LLVM is in a custom path, run cmake with: 
+# If your LLVM is in a custom path, run cmake with:
 # -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm
 find_package(LLVM REQUIRED CONFIG)
 

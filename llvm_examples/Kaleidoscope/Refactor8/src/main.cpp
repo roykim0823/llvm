@@ -37,22 +37,8 @@ extern "C" DLLEXPORT double printd(double X) {
 // Main driver code.
 //===----------------------------------------------------------------------===//
 int compile_obj(toy::CodegenContext& ctx) {
-  // // Initialize the target registry etc.
-  // llvm::InitializeAllTargetInfos();
-  // llvm::InitializeAllTargets();
-  // llvm::InitializeAllTargetMCs();
-  // llvm::InitializeAllAsmParsers();
-  // llvm::InitializeAllAsmPrinters();
-
-  // Instead of InitializeAllTargetInfos(), etc.
-  // it works without all-target in CMakeLists.txt
-  // llvm::InitializeNativeTarget();
-  // llvm::InitializeNativeTargetAsmPrinter();
-  // llvm::InitializeNativeTargetAsmParser();
-  
-
   auto TargetTriple = llvm::sys::getDefaultTargetTriple();
-  ctx.theModule->setTargetTriple(TargetTriple);
+  ctx.theModule->setTargetTriple(llvm::Triple(TargetTriple));
 
   std::string Error;
   auto Target = llvm::TargetRegistry::lookupTarget(TargetTriple, Error);
@@ -69,9 +55,9 @@ int compile_obj(toy::CodegenContext& ctx) {
   auto Features = "";
 
   llvm::TargetOptions opt;
-  auto RM = std::optional<llvm::Reloc::Model>();
-  auto TheTargetMachine =
-      Target->createTargetMachine(TargetTriple, CPU, Features, opt, RM);
+  auto TheTargetMachine = Target->createTargetMachine(
+      llvm::Triple(TargetTriple), CPU, Features, opt, llvm::Reloc::PIC_);
+
 
   ctx.theModule->setDataLayout(TheTargetMachine->createDataLayout());
 
@@ -86,7 +72,7 @@ int compile_obj(toy::CodegenContext& ctx) {
   }
 
   llvm::legacy::PassManager pass;
-  auto FileType = llvm::CGFT_ObjectFile;
+  auto FileType = llvm::CodeGenFileType::ObjectFile;
 
   if (TheTargetMachine->addPassesToEmitFile(pass, dest, nullptr, FileType)) {
     llvm::errs() << "TheTargetMachine can't emit a file of this type";
