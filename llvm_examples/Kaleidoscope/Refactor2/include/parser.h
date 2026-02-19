@@ -8,7 +8,6 @@
 #include "lexer.h"
 
 namespace toy {
-
 class Parser {
 public:
     Parser(Lexer& lexer) : lexer(lexer) {
@@ -20,22 +19,9 @@ public:
 
     void mainLoop();
     int getNextToken();  // Reada another token from the lexer and updates curTok
-
-private:
-    Lexer& lexer;
-
-    /// CurTok/getNextToken - Provide a simple token buffer.
-    int curTok;  // Current token the parser is looking at
-
     int getTokPrecedence();
 
-    /// BinopPrecedence - This holds the precedence for each binary operator that is
-    /// defined.
-    std::map<char, int> binopPrecedence;
 
-    /// LogError* - These are little helper functions for error handling.
-    //std::unique_ptr<ExprAST> logError(const char* str);
-    //std::unique_ptr<PrototypeAST> logErrorP(const char* str);
 
     std::unique_ptr<ExprAST> parseExpression();
     std::unique_ptr<ExprAST> parseNumberExpr();
@@ -52,6 +38,16 @@ private:
     void handleDefinition();
     void handleExtern();
     void handleTopLevelExpression();
+
+  private:
+    Lexer& lexer;
+
+    /// CurTok/getNextToken - Provide a simple token buffer.
+    int curTok;  // Current token the parser is looking at
+
+    /// BinopPrecedence - This holds the precedence for each binary operator that is
+    /// defined.
+    std::map<char, int> binopPrecedence;
 };
 
 } // end namespace toy

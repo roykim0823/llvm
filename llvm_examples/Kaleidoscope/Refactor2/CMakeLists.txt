@@ -49,6 +49,13 @@ add_executable(lexer_test
 target_include_directories(lexer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(lexer_test PRIVATE gtest_main ${llvm_libs})
 
+add_executable(parser_test
+    test/parser_test.cpp src/parser.cpp src/lexer.cpp src/log.cpp
+)
+target_include_directories(parser_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(parser_test PRIVATE gtest_main ${llvm_libs})
+
 # Discover tests automatically
 include(GoogleTest)
 gtest_discover_tests(lexer_test)
+gtest_discover_tests(parser_test)

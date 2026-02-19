@@ -17,19 +17,19 @@ class LexerParamTest : public ::testing::TestWithParam<LexerTestCase> {
 protected:
     void SetUp() override {
         // Create a temporary file to simulate stdin
-        std::ofstream tmpFile("test_input.txt");
+        std::ofstream tmpFile("_lexter_test_input.txt");
         tmpFile << GetParam().input;
         tmpFile.close();
 
         // Redirect stdin to our temp file
-        ASSERT_TRUE(freopen("test_input.txt", "r", stdin) != nullptr);
+        ASSERT_TRUE(freopen("_lexer_test_input.txt", "r", stdin) != nullptr);
     }
 
     void TearDown() override {
         // Restore stdin is complex in C++, usually we just let the
         // OS handle it or refactor to use istreams.
         // Delete the temporary file after the test finishes
-        std::remove("test_input.txt");
+        std::remove("_lexer_test_input.txt");
     }
 };
 
@@ -54,6 +54,7 @@ INSTANTIATE_TEST_SUITE_P(
     LexerParamTest,
     ::testing::Values(
         // Keywords
+        LexerTestCase{"", tok_eof},
         LexerTestCase{"def", tok_def},
         LexerTestCase{"extern", tok_extern},
 
