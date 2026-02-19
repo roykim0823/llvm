@@ -6,8 +6,8 @@
 using namespace toy;
 
 // Helper to bridge the Lexer to the Parser's CurTok
-int Parser::getNextToken() { 
-    return curTok = lexer.gettok(); 
+int Parser::getNextToken() {
+    return curTok = lexer.gettok();
 }
 
 int Parser::getTokPrecedence() {
@@ -18,12 +18,12 @@ int Parser::getTokPrecedence() {
 }
 
 
-// The routine eats all of the tokens that correspond to the production and returns the lexer buffer 
+// The routine eats all of the tokens that correspond to the production and returns the lexer buffer
 // This is a fairly standard recursive descent parser structure.
 // numberexpr ::= number
 std::unique_ptr<ExprAST> Parser::parseNumberExpr() {
     auto result = std::make_unique<NumberExprAST>(lexer.getNumVal());
-    getNextToken(); 
+    getNextToken();
     return std::move(result);
 }
 
@@ -127,7 +127,7 @@ std::unique_ptr<PrototypeAST> Parser::parsePrototype() {
     std::vector<std::string> argNames;
     while (getNextToken() == tok_identifier)
         argNames.push_back(lexer.getIdentifierStr());
-    
+
     if (curTok != ')') return logErrorP("Expected ')' in prototype");
 
     getNextToken(); // eat )
@@ -204,10 +204,9 @@ void Parser::handleTopLevelExpression() {
 }
 
 void Parser::mainLoop() {
-    fprintf(stderr, "ready> ");
     getNextToken(); // Bootstrap the first token
     while (true) {
-        
+        fprintf(stderr, "ready> ");
         switch (curTok) {
         case tok_eof: return;
         case ';':     getNextToken(); break;  // ignore top-level semicolons.
@@ -215,7 +214,6 @@ void Parser::mainLoop() {
         case tok_extern: handleExtern(); break;
         default:      handleTopLevelExpression(); break;
         }
-        fprintf(stderr, "ready> ");
     }
     // Print out all of the generated code.
     ctx.theModule->print(llvm::errs(), nullptr);

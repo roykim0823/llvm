@@ -5,14 +5,14 @@
 #include <memory>
 
 #include "ast.h"
-#include "codegen_ctx.h"
+#include "ir_gen_ctx.h"
 #include "lexer.h"
 
 namespace toy {
 
 class Parser {
 public:
-    Parser(Lexer& lexer, CodegenContext& ctx) : lexer(lexer), ctx(ctx) {
+    Parser(Lexer& lexer, IRGenContext& ctx) : lexer(lexer), ctx(ctx) {
         binopPrecedence['<'] = 10;
         binopPrecedence['+'] = 20;
         binopPrecedence['-'] = 20;
@@ -24,15 +24,15 @@ public:
 
 private:
     Lexer& lexer;
-    CodegenContext& ctx;
+    IRGenContext& ctx;
 
-    /// CurTok/getNextToken - Provide a simple token buffer.    
+    /// CurTok/getNextToken - Provide a simple token buffer.
     int curTok;  // Current token the parser is looking at
 
     int getTokPrecedence();
 
     /// BinopPrecedence - This holds the precedence for each binary operator that is
-    /// defined.    
+    /// defined.
     std::map<char, int> binopPrecedence;
 
     /// LogError* - These are little helper functions for error handling.

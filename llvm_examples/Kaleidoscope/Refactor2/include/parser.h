@@ -5,14 +5,13 @@
 #include <memory>
 
 #include "ast.h"
-#include "compiler_env.h"
 #include "lexer.h"
 
 namespace toy {
 
 class Parser {
 public:
-    Parser(Lexer& lexer, IRGenContext& ctx) : lexer(lexer), ctx(ctx) {
+    Parser(Lexer& lexer) : lexer(lexer) {
         binopPrecedence['<'] = 10;
         binopPrecedence['+'] = 20;
         binopPrecedence['-'] = 20;
@@ -24,7 +23,6 @@ public:
 
 private:
     Lexer& lexer;
-    IRGenContext& ctx;
 
     /// CurTok/getNextToken - Provide a simple token buffer.
     int curTok;  // Current token the parser is looking at

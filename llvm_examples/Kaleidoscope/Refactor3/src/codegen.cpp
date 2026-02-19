@@ -5,15 +5,14 @@
 
 #include "ast.h"
 #include "log.h"
-#include "codegen_ctx.h"
 
 using namespace toy;
 
-llvm::Value *NumberExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *NumberExprAST::codegen(IRGenContext &ctx) {
   return llvm::ConstantFP::get(*ctx.theContext, llvm::APFloat(Val));
 }
 
-llvm::Value *VariableExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *VariableExprAST::codegen(IRGenContext &ctx) {
   // Look this variable up in the function.
   llvm::Value *V = ctx.namedValues[Name];
   if (!V)
@@ -21,7 +20,7 @@ llvm::Value *VariableExprAST::codegen(CodegenContext &ctx) {
   return V;
 }
 
-llvm::Value *BinaryExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *BinaryExprAST::codegen(IRGenContext &ctx) {
   // Recursively emits code for the lef-hand side of the expression, then the righ-hand side,
   // then, we compute the result of the binary expression.
   llvm::Value *L = LHS->codegen(ctx);
@@ -45,7 +44,7 @@ llvm::Value *BinaryExprAST::codegen(CodegenContext &ctx) {
   }
 }
 
-llvm::Value *CallExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *CallExprAST::codegen(IRGenContext &ctx) {
   // Look up the name in the global module table.
   llvm::Function *CalleeF = ctx.theModule->getFunction(Callee);
   if (!CalleeF)
@@ -70,7 +69,7 @@ llvm::Value *CallExprAST::codegen(CodegenContext &ctx) {
 //-----------------------------
 
 // Used both for function bodies and extern declarations.
-llvm::Function *PrototypeAST::codegen(CodegenContext &ctx) {
+llvm::Function *PrototypeAST::codegen(IRGenContext &ctx) {
   // Make the function type:  double(double,double) etc.
   std::vector<llvm::Type *> Doubles(Args.size(), llvm::Type::getDoubleTy(*ctx.theContext));
   llvm::FunctionType *FT =
@@ -88,7 +87,7 @@ llvm::Function *PrototypeAST::codegen(CodegenContext &ctx) {
   return F;
 }
 
-llvm::Function *FunctionAST::codegen(CodegenContext &ctx) {
+llvm::Function *FunctionAST::codegen(IRGenContext &ctx) {
   // First, check for an existing function from a previous 'extern' declaration.
   llvm::Function *TheFunction = ctx.theModule->getFunction(Proto->getName());
 

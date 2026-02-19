@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-#include "codegen_ctx.h"
+#include "ir_gen_ctx.h"
 
 namespace toy{
 
@@ -37,7 +37,7 @@ public:
   virtual ~ExprAST() = default;
 
   // Use a simple virtual method for code generation instead of common visitor pattern
-  virtual llvm::Value *codegen(CodegenContext &ctx) = 0;
+  virtual llvm::Value *codegen(IRGenContext &ctx) = 0;
 };
 
 /// NumberExprAST - Expression class for numeric literals like "1.0".
@@ -47,7 +47,7 @@ class NumberExprAST : public ExprAST {
 public:
   NumberExprAST(double Val) : Val(Val) {}
 
-  llvm::Value *codegen(CodegenContext &ctx) override;
+  llvm::Value *codegen(IRGenContext &ctx) override;
 };
 
 /// VariableExprAST - Expression class for referencing a variable, like "a".
@@ -57,7 +57,7 @@ class VariableExprAST : public ExprAST {
 public:
   VariableExprAST(const std::string &Name) : Name(Name) {}
 
-  llvm::Value *codegen(CodegenContext &ctx) override;
+  llvm::Value *codegen(IRGenContext &ctx) override;
 };
 
 /// BinaryExprAST - Expression class for a binary operator.
@@ -69,8 +69,8 @@ public:
   BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS,
                 std::unique_ptr<ExprAST> RHS)
       : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
-  
-  llvm::Value *codegen(CodegenContext &ctx) override;
+
+  llvm::Value *codegen(IRGenContext &ctx) override;
 };
 
 /// CallExprAST - Expression class for function calls.
@@ -83,7 +83,7 @@ public:
               std::vector<std::unique_ptr<ExprAST>> Args)
       : Callee(Callee), Args(std::move(Args)) {}
 
-  llvm::Value *codegen(CodegenContext &ctx);
+  llvm::Value *codegen(IRGenContext &ctx);
 };
 
 /// PrototypeAST - This class represents the "prototype" for a function,
@@ -99,7 +99,7 @@ public:
 
   const std::string &getName() const { return Name; }
 
-  llvm::Function *codegen(CodegenContext &ctx);
+  llvm::Function *codegen(IRGenContext &ctx);
 };
 
 /// FunctionAST - This class represents a function definition itself.
@@ -111,16 +111,9 @@ public:
   FunctionAST(std::unique_ptr<PrototypeAST> Proto,
               std::unique_ptr<ExprAST> Body)
       : Proto(std::move(Proto)), Body(std::move(Body)) {}
-  
-  llvm::Function *codegen(CodegenContext &ctx);
+
+  llvm::Function *codegen(IRGenContext &ctx);
 };
-
-
-
-// std::unique_ptr<ExprAST> logError(const char* str);
-// std::unique_ptr<PrototypeAST> logErrorP(const char* str);
-// llvm::Value *logErrorV(const char *str);
-
 } // end namespace toy
 
 #endif // AST_H

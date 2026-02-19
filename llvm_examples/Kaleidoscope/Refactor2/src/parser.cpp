@@ -200,7 +200,4 @@ void Parser::mainLoop() {
         default:      handleTopLevelExpression(); break;
         }
     }
-    // Print out all of the generated code.
-    ctx.theModule->print(llvm::errs(), nullptr);
-
 }
