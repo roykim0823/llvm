@@ -28,6 +28,8 @@ protected:
     void TearDown() override {
         // Restore stdin is complex in C++, usually we just let the
         // OS handle it or refactor to use istreams.
+        // Delete the temporary file after the test finishes
+        std::remove("test_input.txt");
     }
 };
 
