@@ -17,7 +17,7 @@ class LexerParamTest : public ::testing::TestWithParam<LexerTestCase> {
 protected:
     void SetUp() override {
         // Create a temporary file to simulate stdin
-        std::ofstream tmpFile("_lexter_test_input.txt");
+        std::ofstream tmpFile("_lexer_test_input.txt");
         tmpFile << GetParam().input;
         tmpFile.close();
 
@@ -63,8 +63,14 @@ INSTANTIATE_TEST_SUITE_P(
         LexerTestCase{"x123", tok_identifier, "x123"},
 
         // Numbers
+        LexerTestCase{"42", tok_number, "", 42.0},
         LexerTestCase{"123.45", tok_number, "", 123.45},
         LexerTestCase{"0.001", tok_number, "", 0.001},
+        LexerTestCase{"1.234567e+10", tok_number, "", 1.234567},  // exponent part is ignored by strtod, so we only check the base number
+        LexerTestCase{".5", tok_number, "", 0.5},
+        LexerTestCase{".0123", tok_number, "", 0.0123},
+        LexerTestCase{"3.14.15", tok_number, "", 3.14}, // Lexer should stop at second dot
+
 
         // Single characters (ASCII)
         LexerTestCase{"+", '+'},

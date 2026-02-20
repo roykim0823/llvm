@@ -27,11 +27,11 @@ public:
     std::unique_ptr<ExprAST> parseNumberExpr();
     std::unique_ptr<ExprAST> parseParenExpr();
     std::unique_ptr<ExprAST> parseIdentifierExpr();
-    std::unique_ptr<ExprAST> parsePrimary();
-    std::unique_ptr<ExprAST> parseBinOpRHS(int exprPrec, std::unique_ptr<ExprAST> lhs);
+    std::unique_ptr<ExprAST> parsePrimary();  // simple warpper for numberexpr/identifierexpr/parenexpr
+    std::unique_ptr<ExprAST> parseBinOpRHS(int exprPrec, std::unique_ptr<ExprAST> lhs);  // called by parseExpression
     std::unique_ptr<PrototypeAST> parsePrototype();
     std::unique_ptr<FunctionAST> parseDefinition();
-    std::unique_ptr<FunctionAST> parseTopLevelExpr();
+    std::unique_ptr<FunctionAST> parseTopLevelExpr();  // simple wrapper for top-level-expression
     std::unique_ptr<PrototypeAST> parseExtern();
 
     // Top-level parsing and JIT driver

@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0")
 project(Kaleidoscope)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -44,7 +45,7 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 
 add_executable(lexer_test
-    test/lexer_test.cpp src/lexer.cpp
+    test/lexer_test.cpp src/lexer.cpp src/log.cpp
 )
 target_include_directories(lexer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(lexer_test PRIVATE gtest_main ${llvm_libs})
@@ -57,5 +58,5 @@ target_link_libraries(parser_test PRIVATE gtest_main ${llvm_libs})
 
 # Discover tests automatically
 include(GoogleTest)
-gtest_discover_tests(lexer_test)
-gtest_discover_tests(parser_test)
+gtest_discover_tests(lexer_test PROPERTIES NO_PRETTY_VALUES TRUE)
+gtest_discover_tests(parser_test PROPERTIES NO_PRETTY_VALUES TRUE)

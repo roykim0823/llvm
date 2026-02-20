@@ -6,6 +6,7 @@
 
 using namespace toy;
 
+// --- Base Fixture ---
 struct ParserTestCase {
     std::string testName;
     std::string input;
@@ -15,15 +16,11 @@ struct ParserTestCase {
 class ParserParamTest : public ::testing::TestWithParam<ParserTestCase> {
 protected:
     void SetUp() override {
-        // Write input to a temporary file
         std::ofstream tmpFile("_parser_input.txt");
         tmpFile << GetParam().input;
         tmpFile.close();
-
-        // Redirect stdin for the lexer
         ASSERT_TRUE(freopen("_parser_input.txt", "r", stdin) != nullptr);
     }
-
     void TearDown() override {
         std::remove("_parser_input.txt");
     }
@@ -38,89 +35,123 @@ void verifyTest(bool shouldPass, std::unique_ptr<T> result, const std::string& i
     }
 }
 
-TEST_P(ParserParamTest, ThreeTopLevelFunctions) {
+// --- 1. Number Expressions ---
+class ParseNumberExprTest : public ParserParamTest {};
+TEST_P(ParseNumberExprTest, parseNumberExpr) {
     Lexer lexer;
     Parser parser(lexer);
-
-    // Bootstrap the first token
     parser.getNextToken();
-
-    const auto& params = GetParam();
-
-    if (params.input.find("def ") == 0) {
-        auto result = parser.parseDefinition();
-        verifyTest<FunctionAST>(params.shouldPass, std::move(result), params.input);
-    } else if (params.input.find("extern ") == 0) {
-        auto result = parser.parseExtern();
-        verifyTest<PrototypeAST>(params.shouldPass, std::move(result), params.input);
-    } else {  // For everything else, treat as a top-level expression
-        auto result = parser.parseTopLevelExpr();
-        verifyTest<FunctionAST>(params.shouldPass, std::move(result), params.input);
-    }
+    verifyTest(GetParam().shouldPass, parser.parseNumberExpr(), GetParam().input);
 }
+INSTANTIATE_TEST_SUITE_P(NumberTests, ParseNumberExprTest, ::testing::Values(
+    ParserTestCase{"Integer", "42", true},
+    ParserTestCase{"Decimal", "3.1415", true},
+    ParserTestCase{"Zero", "0", true},
+    ParserTestCase{"LargeNumber", "1.234567", true},
+    ParserTestCase{"InvalidLeadingDot", ".5", true} // Lexer/Parser expects digit first
+), [](const auto& info) { return info.param.testName; });
 
-INSTANTIATE_TEST_SUITE_P(
-    ParserTests,
-    ParserParamTest,
-    ::testing::Values(
-        // Valid expressions
-        ParserTestCase{"SimpleAddition", "1 + 2", true},
-        ParserTestCase{"Precedence", "1 + 2 * 3", true},
-        ParserTestCase{"Parentheses", "(1 + 2) * 3", true},
-        ParserTestCase{"DecimalNumber", "3.14159", true},
+// --- 2. Identifier & Call Expressions ---
+class ParseIdentifierExprTest : public ParserParamTest {};
+TEST_P(ParseIdentifierExprTest, parseIdentifierExpr) {
+    Lexer lexer;
+    Parser parser(lexer);
+    parser.getNextToken();
+    verifyTest(GetParam().shouldPass, parser.parseIdentifierExpr(), GetParam().input);
+}
+INSTANTIATE_TEST_SUITE_P(IdentifierTests, ParseIdentifierExprTest, ::testing::Values(
+    ParserTestCase{"SimpleVar", "x", true},
+    ParserTestCase{"UnderscoreVar", "my_var_123", true},
+    ParserTestCase{"CallNoArgs", "foo()", true},
+    ParserTestCase{"CallThreeArgs", "foo(a, b, c)", true},
+    ParserTestCase{"NestedCall", "foo(bar(z))", true},
+    ParserTestCase{"CallMissingComma", "foo(a b)", false},
+    ParserTestCase{"CallTrailingComma", "foo(a,)", false},
+    ParserTestCase{"EmptyArgInMiddle", "foo(a,,b)", false}
+), [](const auto& info) { return info.param.testName; });
 
-        // --- Identifiers & Calls ---
-        ParserTestCase{"VariableRef", "myVar", true},
-        ParserTestCase{"FunctionCall", "foo(a, b)", true},
-        ParserTestCase{"NestedCall", "foo(bar(42), b)", true},
+// --- 3. Parentheses Expressions ---
+class ParseParenExprTest : public ParserParamTest {};
+TEST_P(ParseParenExprTest, parseParenExpr) {
+    Lexer lexer;
+    Parser parser(lexer);
+    parser.getNextToken();
+    verifyTest(GetParam().shouldPass, parser.parseParenExpr(), GetParam().input);
+}
+INSTANTIATE_TEST_SUITE_P(ParenTests, ParseParenExprTest, ::testing::Values(
+    ParserTestCase{"SimpleParen", "(42)", true},
+    ParserTestCase{"ExpressionInParen", "(a + b)", true},
+    ParserTestCase{"DeeplyNested", "((((10))))", true},
+    ParserTestCase{"UnclosedParen", "(1 + 2", false},
+    ParserTestCase{"EmptyParen", "()", false}, // parseExpression returns nullptr for empty
+    ParserTestCase{"MismatchedParen", "(1 + 2]", false}
+), [](const auto& info) { return info.param.testName; });
 
-        // Valid definitions & externs
-        ParserTestCase{"FunctionDef", "def foo(x y) x + y", true},
-        ParserTestCase{"ExternLink", "extern cos(x)", true},
-        ParserTestCase{"NoArgDef", "def pi() 3.14", true},
+// --- 4. Full Binary Expressions ---
+class ParseExpressionTest : public ParserParamTest {};
+TEST_P(ParseExpressionTest, parseExpression) {
+    // This test covers the full expression parsing logic, including operator precedence and associativity.
+    // parser.parseExpression() will call parsePrimary() and parseBinOpRHS() to build the AST according to the grammar.
+    Lexer lexer;
+    Parser parser(lexer);
+    parser.getNextToken();
+    verifyTest(GetParam().shouldPass, parser.parseExpression(), GetParam().input);
+}
+INSTANTIATE_TEST_SUITE_P(ExpressionTests, ParseExpressionTest, ::testing::Values(
+    ParserTestCase{"Addition", "1 + 2", true},
+    ParserTestCase{"OrderOfOps", "1 + 2 * 3", true},
+    ParserTestCase{"PrecedenceMix", "a * b + c * d", true},
+    ParserTestCase{"Associativity", "a - b - c", true},
+    ParserTestCase{"Comparison", "x < y", true},
+    ParserTestCase{"TrailingOperator", "10 +", false},
+    ParserTestCase{"LeadingOperator", "+ 10", false},
+    ParserTestCase{"DoubleOperator", "10 ++ 5", false}
+), [](const auto& info) { return info.param.testName; });
 
-        // Syntax Errors
-        ParserTestCase{"MissingParen", "(1 + 2", false},
-        ParserTestCase{"InvalidDef", "def foo(123) x", false},
-        ParserTestCase{"MissingCommaInCall", "foo(a b)", false},
-        ParserTestCase{"TrailingOp", "10 + ", false},
-        ParserTestCase{"EmptyExpr", "+ 5", false}
-    ),
-    [](const ::testing::TestParamInfo<ParserParamTest::ParamType>& info) {
-        return info.param.testName;
-    }
-);
+// --- 5. Function Prototypes ---
+class ParsePrototypeTest : public ParserParamTest {};
+TEST_P(ParsePrototypeTest, parsePrototype) {
+    Lexer lexer;
+    Parser parser(lexer);
+    parser.getNextToken();
+    verifyTest(GetParam().shouldPass, parser.parsePrototype(), GetParam().input);
+}
+INSTANTIATE_TEST_SUITE_P(PrototypeTests, ParsePrototypeTest, ::testing::Values(
+    ParserTestCase{"SimpleProto", "foo(x y)", true},
+    ParserTestCase{"NoArgProto", "bar()", true},
+    ParserTestCase{"ManyArgs", "func(a b c d e)", true},
+    ParserTestCase{"DigitInName", "foo123(x)", true},
+    ParserTestCase{"NumericStart", "123foo(x)", false},
+    ParserTestCase{"ArgMissingName", "foo(x , z)", false},
+    ParserTestCase{"InvalidArgSeparator", "foo(x, y)", false} // Prototype uses space, not comma
+), [](const auto& info) { return info.param.testName; });
 
-// class ParserInnerFuncTest : public ::testing::TestWithParam<ParserTestCase> {
-// protected:
-//     void SetUp() override {
-//         // Write input to a temporary file
-//         std::ofstream tmpFile("_parser_inner_input.txt");
-//         tmpFile << GetParam().input;
-//         tmpFile.close();
+// --- 6. Function Definitions ---
+class ParseDefinitionTest : public ParserParamTest {};
+TEST_P(ParseDefinitionTest, parseDefinition) {
+    Lexer lexer;
+    Parser parser(lexer);
+    parser.getNextToken();
+    verifyTest(GetParam().shouldPass, parser.parseDefinition(), GetParam().input);
+}
+INSTANTIATE_TEST_SUITE_P(DefinitionTests, ParseDefinitionTest, ::testing::Values(
+    ParserTestCase{"DefSimple", "def foo(x) x", true},
+    ParserTestCase{"DefMultiLineLogic", "def bar(x y) (x + y) * (x - y)", true},
+    ParserTestCase{"MissingBody", "def foo(x)", false},
+    ParserTestCase{"KeywordInName", "def def(x) x", false},
+    ParserTestCase{"MalformedProto", "def foo x) x", false}
+), [](const auto& info) { return info.param.testName; });
 
-//         // Redirect stdin for the lexer
-//         ASSERT_TRUE(freopen("_parser_inner_input.txt", "r", stdin) != nullptr);
-//     }
-
-//     void TearDown() override {
-//         std::remove("_parser_inner_input.txt");
-//     }
-// };
-
-// TEST_P(ParserInnerFuncTest, parseNumberExpr) {
-//     Lexer lexer;
-//     Parser parser(lexer);
-
-//     // Bootstrap the first token
-//     parser.getNextToken();
-
-//     const auto& params = GetParam();
-//     auto result = parser.parseNumberExpr();
-
-//     if (params.shouldPass) {
-//         EXPECT_NE(result, nullptr) << "Failed to parse number expression: " << params.input;
-//     } else {
-//         EXPECT_EQ(result, nullptr) << "Should have failed to parse number expression: " << params.input;
-//     }
-// }
+// --- 7. Extern Declarations ---
+class ParseExternTest : public ParserParamTest {};
+TEST_P(ParseExternTest, parseExtern) {
+    Lexer lexer;
+    Parser parser(lexer);
+    parser.getNextToken();
+    verifyTest(GetParam().shouldPass, parser.parseExtern(), GetParam().input);
+}
+INSTANTIATE_TEST_SUITE_P(ExternTests, ParseExternTest, ::testing::Values(
+    ParserTestCase{"ExternCos", "extern cos(x)", true},
+    ParserTestCase{"ExternSin", "extern sin(y)", true},
+    ParserTestCase{"ExternMissingKeyword", "cos(x)", false}
+), [](const auto& info) { return info.param.testName; });
