@@ -163,3 +163,99 @@ INSTANTIATE_TEST_SUITE_P(ExternTests, ParseExternTest, ::testing::Values(
     ParserTestCase{"ExternSin", "extern sin(y)", true},
     ParserTestCase{"ExternMissingKeyword", "cos(x)", false}
 ), [](const auto& info) { return info.param.testName; });
+
+// -----------------------------------------------------------------------------
+// JIT Execution Tests: These tests will parse an expression, generate LLVM IR, execute it
+// in the JIT, and verify the runtime result matches the expected value. This will test the full
+// pipeline from parsing to code generation to execution for various expressions.
+
+// 1. Define the parameters for the JIT execution tests
+struct JITTestCase {
+    std::string testName;
+    std::string expression;
+    double expectedResult;
+};
+
+// 2. Create the Parametric Fixture inheriting from CodegenTest
+class JITExecutionParamTest : public ::testing::TestWithParam<JITTestCase> {
+protected:
+    std::unique_ptr<IRGenContext> ctx;
+
+    void SetUp() override {
+        // Initialize a fresh IRGenContext for each test to ensure a clean slate
+        // for code generation and JIT execution
+        ctx = std::make_unique<IRGenContext>();
+
+        // Write the expression to a temporary file and redirect stdin to read from it,
+        // so the parser can read the expression as if it were user input
+        std::ofstream tmpFile("_jit_param_input.txt");
+        tmpFile << GetParam().expression;
+        tmpFile.close();
+        ASSERT_TRUE(freopen("_jit_param_input.txt", "r", stdin) != nullptr);
+    }
+
+    void TearDown() override {
+        // Clean up the temporary file and reset the context to free resources
+        std::remove("_jit_param_input.txt");
+        ctx.reset();
+    }
+};
+
+TEST_P(JITExecutionParamTest, EvaluateExpression) {
+    Lexer lexer;
+    Parser parser(lexer, *ctx);
+    
+    // Prime the parser by reading the first token, which is necessary before calling parseTopLevelExpr
+    parser.getNextToken(); 
+
+    // 1. Parse the expression into an AST
+    auto ast = parser.parseTopLevelExpr();
+    ASSERT_NE(ast, nullptr) << "Failed to parse expression: " << GetParam().expression;
+
+    // 2. Generate LLVM IR from the AST
+    llvm::Function *F = ast->codegen(*ctx);
+    ASSERT_NE(F, nullptr) << "Failed to generate IR for expression: " << GetParam().expression;
+
+    // 3. Execute the generated IR in the JIT and verify the result
+    auto RT = ctx->theJIT->getMainJITDylib().createResourceTracker();
+
+    // 4. Package the module and context, then hand it to the JIT
+    auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx->theModule), std::move(ctx->theContext));
+    ctx->ExitOnErr(ctx->theJIT->addModule(std::move(TSM), RT));
+
+    // 5. Immediately re-initialize the context's module and pass manager to maintain state integrity
+    ctx->InitializeModuleAndPassManager();
+
+    // 6. Look up the compiled symbol for the anonymous expression function
+    auto ExprSymbol = ctx->ExitOnErr(ctx->theJIT->lookup("__anon_expr"));
+
+    // 7. Cast the symbol address to a callable C++ function pointer and execute it
+    double (*FP)() = ExprSymbol.getAddress().toPtr<double (*)()>();
+    double actualResult = FP();
+
+    // 8. Verify the result matches the expected value
+    EXPECT_DOUBLE_EQ(actualResult, GetParam().expectedResult) 
+        << "Mismatch in expression: " << GetParam().expression;
+
+    // 9. Clean up JIT memory for this test case
+    ctx->ExitOnErr(RT->remove());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MathOperations,
+    JITExecutionParamTest,
+    ::testing::Values(
+        // Basic arithmetic operations
+        JITTestCase{"Addition", "4.0 + 5.0", 9.0},
+        JITTestCase{"Subtraction", "10.0 - 2.5", 7.5},
+        JITTestCase{"Multiplication", "3.0 * 3.0", 9.0},
+        // Operator precedence and associativity
+        JITTestCase{"Precedence", "2.0 + 3.0 * 4.0", 14.0},
+        JITTestCase{"Parentheses", "(2.0 + 3.0) * 4.0", 20.0},
+        // Comparison operations (< operator returns 1.0 if true, 0.0 if false)
+        JITTestCase{"ComparisonTrue", "1.0 < 5.0", 1.0},
+        JITTestCase{"ComparisonFalse", "5.0 < 1.0", 0.0},
+        JITTestCase{"ComplexExpression", "(1.0 + 2.0) * (5.0 < 10.0) + 4.0", 7.0}
+    ),
+    [](const auto& info) { return info.param.testName; }
+);

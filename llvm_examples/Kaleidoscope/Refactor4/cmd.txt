@@ -1,6 +1,14 @@
+def test(x) (1+2+x)*(x+(1+2));
 4+5;
-def foo(a b) a*a + 2*a*b + b*b;
-def bar(a) foo(a, 4.0) + bar(31337);
-extern cos(x);
-cos(1.234);
+def testfunc(x y) x + y*2;
+testfunc(4, 10);
+testfunc(5, 10);
 
+def foo(x) x+1;
+foo(2);
+
+extern sin(x);
+extern cos(x);
+sin(1.0);
+def foo2(x) sin(x)*sin(x) + cos(x)*cos(x);
+foo2(4.0);

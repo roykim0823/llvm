@@ -6,8 +6,8 @@
 using namespace toy;
 
 // Helper to bridge the Lexer to the Parser's CurTok
-int Parser::getNextToken() { 
-    return curTok = lexer.gettok(); 
+int Parser::getNextToken() {
+    return curTok = lexer.gettok();
 }
 
 int Parser::getTokPrecedence() {
@@ -18,12 +18,12 @@ int Parser::getTokPrecedence() {
 }
 
 
-// The routine eats all of the tokens that correspond to the production and returns the lexer buffer 
+// The routine eats all of the tokens that correspond to the production and returns the lexer buffer
 // This is a fairly standard recursive descent parser structure.
 // numberexpr ::= number
 std::unique_ptr<ExprAST> Parser::parseNumberExpr() {
     auto result = std::make_unique<NumberExprAST>(lexer.getNumVal());
-    getNextToken(); 
+    getNextToken();
     return std::move(result);
 }
 
@@ -127,7 +127,7 @@ std::unique_ptr<PrototypeAST> Parser::parsePrototype() {
     std::vector<std::string> argNames;
     while (getNextToken() == tok_identifier)
         argNames.push_back(lexer.getIdentifierStr());
-    
+
     if (curTok != ')') return logErrorP("Expected ')' in prototype");
 
     getNextToken(); // eat )
@@ -167,8 +167,8 @@ void Parser::handleDefinition() {
       FnIR->print(llvm::errs());
       fprintf(stderr, "\n");
 
-      // To Support JIT
-      ctx.ExitOnErr(ctx.TheJIT->addModule(
+    // To Support JIT
+      ctx.ExitOnErr(ctx.theJIT->addModule(
           llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext))));
       ctx.InitializeModuleAndPassManager();
       // --- END JIT support
@@ -185,7 +185,7 @@ void Parser::handleExtern() {
       fprintf(stderr, "Read extern:\n");
       FnIR->print(llvm::errs());
       fprintf(stderr, "\n");
-      FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST);  // To Support JIT
+      ctx.functionProtos[ProtoAST->getName()] = std::move(ProtoAST);  // To Support JIT
     }
   } else {
     // Skip token for error recovery.
@@ -201,21 +201,21 @@ void Parser::handleTopLevelExpression() {
       FnIR->print(llvm::errs());
       fprintf(stderr, "\n");
 
-      // Remove the anonymous expression.
-      //FnIR->eraseFromParent();  // no need with the below JIT
+      // Remove the anonymous expression.  // No need with the below JIT
+      // FnIR->eraseFromParent();
 
       // JIT implementation
       //---------------------------------------------------------------------
       // Create a ResourceTracker to track JIT'd memory allocated to our
       // anonymous expression -- that way we can free it after executing.
-      auto RT = ctx.TheJIT->getMainJITDylib().createResourceTracker();
+      auto RT = ctx.theJIT->getMainJITDylib().createResourceTracker();
 
       auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext));
-      ctx.ExitOnErr(ctx.TheJIT->addModule(std::move(TSM), RT));
+      ctx.ExitOnErr(ctx.theJIT->addModule(std::move(TSM), RT));
       ctx.InitializeModuleAndPassManager();
 
       // Search the JIT for the __anon_expr symbol.
-      auto ExprSymbol = ctx.ExitOnErr(ctx.TheJIT->lookup("__anon_expr"));
+      auto ExprSymbol = ctx.ExitOnErr(ctx.theJIT->lookup("__anon_expr"));
 
       // Get the symbol's address and cast it to the right type (takes no
       // arguments, returns a double) so we can call it as a native function.
@@ -225,8 +225,6 @@ void Parser::handleTopLevelExpression() {
       // Delete the anonymous expression module from the JIT.
       ctx.ExitOnErr(RT->remove());
       //---------------------------------------------------------------------
-
-
     }
   } else {
     // Skip token for error recovery.
@@ -246,7 +244,6 @@ void Parser::mainLoop() {
         case tok_extern: handleExtern(); break;
         default:      handleTopLevelExpression(); break;
         }
-        
     }
     // Print out all of the generated code.
     ctx.theModule->print(llvm::errs(), nullptr);
