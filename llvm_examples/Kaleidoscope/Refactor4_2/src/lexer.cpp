@@ -1,0 +1,62 @@
+#include <cstdio>
+#include <cctype>
+
+#include "lexer.h"
+#include "log.h"
+
+using namespace toy;
+/// gettok - Return the next token from standard input.
+int Lexer::gettok() {
+
+    while (isspace(lastChar))  // Skip any whitespace
+        lastChar = getchar();
+
+    if (isalpha(lastChar)) {  // identifier: [a-zA-Z][a-zA-Z0-9]*
+        identifierStr = lastChar;
+        while (isalnum((lastChar = getchar())))
+            identifierStr += lastChar;
+
+        if (identifierStr == "def") return tok_def;
+        if (identifierStr == "extern") return tok_extern;
+        return tok_identifier;
+    }
+
+    if (isdigit(lastChar) || lastChar == '.') {  // Number: [0-9.]+
+        std::string numStr;
+        if (lastChar == '.') {
+            // If we see a dot, it must be followed by a digit to be a valid number.
+            int nextChar = getchar();
+            if (!isdigit(nextChar)) {
+                // Not a valid number, return the dot as a token.
+                lastChar = nextChar; // Update lastChar to the next character for future calls.
+                return '.';
+            }
+            numStr += "0."; // Prepend a zero for numbers like ".5"
+            lastChar = nextChar; // Update lastChar to the digit after the dot for future calls.
+        }
+
+        do {
+            numStr += lastChar;
+            lastChar = getchar();
+        } while (isdigit(lastChar) || lastChar == '.');
+
+        numVal = strtod(numStr.c_str(), nullptr);
+        return tok_number;
+    }
+
+    if (lastChar == '#') {
+        // Comment until end of line.
+        do lastChar = getchar();
+        while (lastChar != EOF && lastChar != '\n' && lastChar != '\r');
+
+        if (lastChar != EOF) return gettok();
+    }
+
+    // Check for end of file.  Don't eat the EOF.
+    if (lastChar == EOF) return tok_eof;
+
+    // Otherwise, just return the character as its ascii value.
+    int thisChar = lastChar;
+    lastChar = getchar();
+    return thisChar;
+}
