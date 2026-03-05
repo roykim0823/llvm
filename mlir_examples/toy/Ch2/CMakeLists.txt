@@ -1,5 +1,6 @@
 # For a better template to copy, see examples/standalone
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.20)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0")
 project(toy-ch2)
 
 # 1. Find the packages FIRST
@@ -13,6 +14,7 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 # 3. Include the macros that define 'mlir_tablegen' and 'add_toy_chapter'
 include(AddLLVM)
 include(AddMLIR)
+include(TableGen)
 
 # 4. NOW you can enter the subdirectory because the commands are defined
 include_directories(${MLIR_INCLUDE_DIRS}
