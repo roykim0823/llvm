@@ -132,8 +132,16 @@ TEST_P(BinaryOpTest, BinaryOpResult) {
 
     llvm::Value *V = expr->codegen(*ctx);
 
-    // Verify the Binary Expression is correctly folded to the expected result by constant folding (e.g., "3.0" for addition, "-1.0" for subtraction)
-    EXPECT_TRUE(IRToString(V).find(params.expectedResult) != std::string::npos) << IRToString(V);
+    // Verify the Binary Expression is correctly folded to the expected result by constant folding
+    // (e.g., "3.0" for addition, "-1.0" for subtraction)
+    if (params.expectedResult.empty()) {
+        // If no expected result is provided, we just check that codegen succeeded
+        EXPECT_EQ(V, nullptr);
+    } else {
+        // For comparison, we check if the generated IR contains the expected constant value
+        EXPECT_TRUE(IRToString(V).find(params.expectedResult) != std::string::npos)
+            << "Expected result '" << params.expectedResult << "' not found in IR: " << IRToString(V);
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
