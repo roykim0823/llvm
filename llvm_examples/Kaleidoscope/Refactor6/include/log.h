@@ -10,5 +10,6 @@ namespace toy {
 std::unique_ptr<ExprAST> logError(const char* str);
 std::unique_ptr<PrototypeAST> logErrorP(const char* str);
 llvm::Value *logErrorV(const char *str);
+
 }
 #endif

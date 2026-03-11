@@ -2,6 +2,7 @@
 #include <cctype>
 
 #include "lexer.h"
+#include "log.h"
 
 using namespace toy;
 /// gettok - Return the next token from standard input.
@@ -29,6 +30,18 @@ int Lexer::gettok() {
 
     if (isdigit(lastChar) || lastChar == '.') {  // Number: [0-9.]+
         std::string numStr;
+        if (lastChar == '.') {
+            // If we see a dot, it must be followed by a digit to be a valid number.
+            int nextChar = getchar();
+            if (!isdigit(nextChar)) {
+                // Not a valid number, return the dot as a token.
+                lastChar = nextChar; // Update lastChar to the next character for future calls.
+                return '.';
+            }
+            numStr += "0."; // Prepend a zero for numbers like ".5"
+            lastChar = nextChar; // Update lastChar to the digit after the dot for future calls.
+        }
+
         do {
             numStr += lastChar;
             lastChar = getchar();
@@ -42,7 +55,7 @@ int Lexer::gettok() {
         // Comment until end of line.
         do lastChar = getchar();
         while (lastChar != EOF && lastChar != '\n' && lastChar != '\r');
-        
+
         if (lastChar != EOF) return gettok();
     }
 

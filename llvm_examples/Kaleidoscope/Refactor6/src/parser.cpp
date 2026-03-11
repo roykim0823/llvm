@@ -5,47 +5,25 @@
 
 using namespace toy;
 
-// Global Variables
-/// BinopPrecedence - This holds the precedence for each binary operator that is
-/// defined.    
-std::map<char, int> binopPrecedence;
-extern std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;  // define in ast.cpp
-
-void init_binop() {
-    binopPrecedence['<'] = 10;
-    binopPrecedence['+'] = 20;
-    binopPrecedence['-'] = 20;
-    binopPrecedence['*'] = 40;  
-}
-
-Parser::Parser(Lexer& lexer, CodegenContext& ctx) : lexer(lexer), ctx(ctx) {
-    init_binop();
-}
-
 // Helper to bridge the Lexer to the Parser's CurTok
-int Parser::getNextToken() { 
-    return curTok = lexer.gettok(); 
+int Parser::getNextToken() {
+    return curTok = lexer.gettok();
 }
 
 int Parser::getTokPrecedence() {
     if (!isascii(curTok)) return -1;
-    // auto it = binopPrecedence.find(static_cast<char>(curTok));
-    // if (it == binopPrecedence.end()) return -1;
-    // return it->second;
-
-    // Make sure it's a declared binop.
-    int TokPrec = binopPrecedence[curTok];
-    if (TokPrec == 0) return -1;
-    return TokPrec;
+    auto it = ctx.binopPrecedence.find(static_cast<char>(curTok));
+    if (it == ctx.binopPrecedence.end()) return -1;
+    return it->second;
 }
 
 
-// The routine eats all of the tokens that correspond to the production and returns the lexer buffer 
+// The routine eats all of the tokens that correspond to the production and returns the lexer buffer
 // This is a fairly standard recursive descent parser structure.
 // numberexpr ::= number
 std::unique_ptr<ExprAST> Parser::parseNumberExpr() {
     auto result = std::make_unique<NumberExprAST>(lexer.getNumVal());
-    getNextToken(); 
+    getNextToken();
     return std::move(result);
 }
 
@@ -88,8 +66,8 @@ std::unique_ptr<ExprAST> Parser::parseIdentifierExpr() {
     return std::make_unique<CallExprAST>(idName, std::move(args));
 }
 
-/// ifexpr ::= 'if' expression 'then' expression 'else' expression
-std::unique_ptr<ExprAST> Parser::parseIfExpr()  {
+// ifexpr ::= 'if' expression 'then' expression 'else' expression
+std::unique_ptr<ExprAST> Parser::parseIfExpr() {
   getNextToken(); // eat the if.
 
   // condition.
@@ -164,7 +142,12 @@ std::unique_ptr<ExprAST> Parser::parseForExpr() {
                                        std::move(Step), std::move(Body));
 }
 
-// primary ::= identifierexpr | numberexpr | parenexpr
+/// primary
+///   ::= identifierexpr
+///   ::= numberexpr
+///   ::= parenexpr
+///   ::= ifexpr
+///   ::= forexpr
 std::unique_ptr<ExprAST> Parser::parsePrimary() {
     switch (curTok) {
     case tok_identifier: return parseIdentifierExpr();
@@ -182,7 +165,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 std::unique_ptr<ExprAST> Parser::parseUnary() {
   // If the current token is not an operator, it must be a primary expr.
   if (!isascii(curTok) || curTok == '(' || curTok == ',')
-    return parsePrimary();
+    return parsePrimary();  // parsePrimary() is included in parseUnary()
 
   // If this is a unary operator, read it.
   int Opc = curTok;
@@ -192,8 +175,7 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
   return nullptr;
 }
 
-
-// binoprhs ::= ('+' primary)*
+// binoprhs ::= ('+' unary)*
 std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int exprPrec, std::unique_ptr<ExprAST> lhs) {
     while (true) {
         // If this is a binop, find its precedence.
@@ -208,6 +190,7 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int exprPrec, std::unique_ptr<Exp
         getNextToken(); // eat binop
 
         // Parse the unary expression after the binary operator.
+        // auto rhs = parsePrimary();
         auto rhs = parseUnary();
         if (!rhs) return nullptr;
 
@@ -224,8 +207,9 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int exprPrec, std::unique_ptr<Exp
 }
 
 // expression
-//   ::= primary binoprhs
+//   ::= unary binoprhs
 std::unique_ptr<ExprAST> Parser::parseExpression() {
+    // auto lhs = parsePrimary();
     auto lhs = parseUnary();
     if (!lhs) return nullptr;
     return parseBinOpRHS(0, std::move(lhs));
@@ -330,8 +314,8 @@ void Parser::handleDefinition() {
       FnIR->print(llvm::errs());
       fprintf(stderr, "\n");
 
-      // To Support JIT
-      ctx.ExitOnErr(ctx.TheJIT->addModule(
+    // To Support JIT
+      ctx.ExitOnErr(ctx.theJIT->addModule(
           llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext))));
       ctx.InitializeModuleAndPassManager();
       // --- END JIT support
@@ -348,7 +332,7 @@ void Parser::handleExtern() {
       fprintf(stderr, "Read extern:\n");
       FnIR->print(llvm::errs());
       fprintf(stderr, "\n");
-      FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST);  // To Support JIT
+      ctx.functionProtos[ProtoAST->getName()] = std::move(ProtoAST);  // To Support JIT
     }
   } else {
     // Skip token for error recovery.
@@ -364,21 +348,21 @@ void Parser::handleTopLevelExpression() {
       FnIR->print(llvm::errs());
       fprintf(stderr, "\n");
 
-      // Remove the anonymous expression.
-      //FnIR->eraseFromParent();  // no need with the below JIT
+      // Remove the anonymous expression.  // No need with the below JIT
+      // FnIR->eraseFromParent();
 
       // JIT implementation
       //---------------------------------------------------------------------
       // Create a ResourceTracker to track JIT'd memory allocated to our
       // anonymous expression -- that way we can free it after executing.
-      auto RT = ctx.TheJIT->getMainJITDylib().createResourceTracker();
+      auto RT = ctx.theJIT->getMainJITDylib().createResourceTracker();
 
       auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext));
-      ctx.ExitOnErr(ctx.TheJIT->addModule(std::move(TSM), RT));
+      ctx.ExitOnErr(ctx.theJIT->addModule(std::move(TSM), RT));
       ctx.InitializeModuleAndPassManager();
 
       // Search the JIT for the __anon_expr symbol.
-      auto ExprSymbol = ctx.ExitOnErr(ctx.TheJIT->lookup("__anon_expr"));
+      auto ExprSymbol = ctx.ExitOnErr(ctx.theJIT->lookup("__anon_expr"));
 
       // Get the symbol's address and cast it to the right type (takes no
       // arguments, returns a double) so we can call it as a native function.
@@ -388,8 +372,6 @@ void Parser::handleTopLevelExpression() {
       // Delete the anonymous expression module from the JIT.
       ctx.ExitOnErr(RT->remove());
       //---------------------------------------------------------------------
-
-
     }
   } else {
     // Skip token for error recovery.
@@ -409,7 +391,6 @@ void Parser::mainLoop() {
         case tok_extern: handleExtern(); break;
         default:      handleTopLevelExpression(); break;
         }
-        
     }
     // Print out all of the generated code.
     ctx.theModule->print(llvm::errs(), nullptr);

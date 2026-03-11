@@ -5,33 +5,31 @@
 
 #include "ast.h"
 #include "log.h"
-#include "codegen_ctx.h"
-
 
 using namespace toy;
-extern std::map<char, int> binopPrecedence;  // solution1: defined in parser.cpp
-std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos; // To Support JIT
 
-llvm::Function *getFunction(std::string Name, CodegenContext &ctx) {
+// Helper function to look up a variable name in the function's symbol table and return its LLVM IR value.
+// To allow each function to live in its own module, we'll need a way to re-generate
+// previous function declarations into each new module we open
+static llvm::Function *getFunction(std::string Name, IRGenContext &ctx) {
   // First, see if the function has already been added to the current module.
   if (auto *F = ctx.theModule->getFunction(Name))
     return F;
 
   // If not, check whether we can codegen the declaration from some existing prototype.
-  auto FI = FunctionProtos.find(Name);
-  if (FI != FunctionProtos.end())
+  auto FI = ctx.functionProtos.find(Name);
+  if (FI != ctx.functionProtos.end())
     return FI->second->codegen(ctx);
 
   // If no existing prototype exists, return null.
   return nullptr;
 }
 
-
-llvm::Value *NumberExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *NumberExprAST::codegen(IRGenContext &ctx) {
   return llvm::ConstantFP::get(*ctx.theContext, llvm::APFloat(Val));
 }
 
-llvm::Value *VariableExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *VariableExprAST::codegen(IRGenContext &ctx) {
   // Look this variable up in the function.
   llvm::Value *V = ctx.namedValues[Name];
   if (!V)
@@ -39,7 +37,7 @@ llvm::Value *VariableExprAST::codegen(CodegenContext &ctx) {
   return V;
 }
 
-llvm::Value *UnaryExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *UnaryExprAST::codegen(IRGenContext &ctx) {
   llvm::Value *OperandV = Operand->codegen(ctx);
   if (!OperandV)
     return nullptr;
@@ -51,8 +49,7 @@ llvm::Value *UnaryExprAST::codegen(CodegenContext &ctx) {
   return ctx.builder->CreateCall(F, OperandV, "unop");
 }
 
-
-llvm::Value *BinaryExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *BinaryExprAST::codegen(IRGenContext &ctx) {
   // Recursively emits code for the lef-hand side of the expression, then the righ-hand side,
   // then, we compute the result of the binary expression.
   llvm::Value *L = LHS->codegen(ctx);
@@ -82,9 +79,34 @@ llvm::Value *BinaryExprAST::codegen(CodegenContext &ctx) {
 
   llvm::Value *Ops[] = {L, R};
   return ctx.builder->CreateCall(F, Ops, "binop");
+
 }
 
-llvm::Value *IfExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *CallExprAST::codegen(IRGenContext &ctx) {
+  // Look up the name in the global module table.
+  // llvm::Function *CalleeF = ctx.theModule->getFunction(Callee);
+
+  // To support multiple modules, we need to re-generate the function declaration
+  // into the new module if it doesn't already exist.
+  llvm::Function *CalleeF = getFunction(Callee, ctx);
+  if (!CalleeF)
+    return logErrorV("Unknown function referenced");
+
+  // If argument mismatch error.
+  if (CalleeF->arg_size() != Args.size())
+    return logErrorV("Incorrect # arguments passed");
+
+  std::vector<llvm::Value *> ArgsV;
+  for (unsigned i = 0, e = Args.size(); i != e; ++i) {
+    ArgsV.push_back(Args[i]->codegen(ctx));
+    if (!ArgsV.back())
+      return nullptr;
+  }
+
+  return ctx.builder->CreateCall(CalleeF, ArgsV, "calltmp");
+}
+
+llvm::Value *IfExprAST::codegen(IRGenContext &ctx) {
   llvm::Value *CondV = Cond->codegen(ctx);
   if (!CondV)
     return nullptr;
@@ -115,7 +137,7 @@ llvm::Value *IfExprAST::codegen(CodegenContext &ctx) {
   ThenBB = ctx.builder->GetInsertBlock();
 
   // Emit else block.
-  TheFunction->insert(TheFunction->end(), ElseBB);  // Add the ElseBB to TheFunction
+  TheFunction->insert(TheFunction->end(), ElseBB);
   ctx.builder->SetInsertPoint(ElseBB);
 
   llvm::Value *ElseV = Else->codegen(ctx);
@@ -151,7 +173,7 @@ llvm::Value *IfExprAST::codegen(CodegenContext &ctx) {
 //   endcond = endexpr
 //   br endcond, loop, endloop
 // outloop:
-llvm::Value *ForExprAST::codegen(CodegenContext &ctx) {
+llvm::Value *ForExprAST::codegen(IRGenContext &ctx) {
   // Emit the start code first, without 'variable' in scope.
   llvm::Value *StartVal = Start->codegen(ctx);
   if (!StartVal)
@@ -230,47 +252,13 @@ llvm::Value *ForExprAST::codegen(CodegenContext &ctx) {
   // for expr always returns 0.0.
   return llvm::Constant::getNullValue(llvm::Type::getDoubleTy(*ctx.theContext));
 }
-// llvm::Function *getFunction(std::string Name, CodegenContext &ctx) {
-//   // First, see if the function has already been added to the current module.
-//   if (auto *F = ctx.theModule->getFunction(Name))
-//     return F;
-
-//   // If not, check whether we can codegen the declaration from some existing prototype.
-//   auto FI = FunctionProtos.find(Name);
-//   if (FI != FunctionProtos.end())
-//     return FI->second->codegen(ctx);
-
-//   // If no existing prototype exists, return null.
-//   return nullptr;
-// }
-
-llvm::Value *CallExprAST::codegen(CodegenContext &ctx) {
-  // Look up the name in the global module table.
-  llvm::Function *CalleeF = getFunction(Callee, ctx);
- 
-  if (!CalleeF)
-    return logErrorV("Unknown function referenced");
-
-  // If argument mismatch error.
-  if (CalleeF->arg_size() != Args.size())
-    return logErrorV("Incorrect # arguments passed");
-
-  std::vector<llvm::Value *> ArgsV;
-  for (unsigned i = 0, e = Args.size(); i != e; ++i) {
-    ArgsV.push_back(Args[i]->codegen(ctx));
-    if (!ArgsV.back())
-      return nullptr;
-  }
-
-  return ctx.builder->CreateCall(CalleeF, ArgsV, "calltmp");
-}
 
 //-----------------------------
 // Function Code Generation: prototypes and functions
 //-----------------------------
 
 // Used both for function bodies and extern declarations.
-llvm::Function *PrototypeAST::codegen(CodegenContext &ctx) {
+llvm::Function *PrototypeAST::codegen(IRGenContext &ctx) {
   // Make the function type:  double(double,double) etc.
   std::vector<llvm::Type *> Doubles(Args.size(), llvm::Type::getDoubleTy(*ctx.theContext));
   llvm::FunctionType *FT =
@@ -288,19 +276,25 @@ llvm::Function *PrototypeAST::codegen(CodegenContext &ctx) {
   return F;
 }
 
-llvm::Function *FunctionAST::codegen(CodegenContext &ctx) {
+llvm::Function *FunctionAST::codegen(IRGenContext &ctx) {
+  // // First, check for an existing function from a previous 'extern' declaration.
+  // llvm::Function *TheFunction = ctx.theModule->getFunction(Proto->getName());
+
+  // if (!TheFunction)
+  //   TheFunction = Proto->codegen(ctx);
+
   // Transfer ownership of the prototype to the FunctionProtos map, but keep a
-  // reference to it for use below.  To Support JIT ---------------------
+  // reference to it for use below.
   auto &P = *Proto;
-  FunctionProtos[Proto->getName()] = std::move(Proto);
+  ctx.functionProtos[Proto->getName()] = std::move(Proto);
   llvm::Function *TheFunction = getFunction(P.getName(), ctx);
-  // ---------------------------------------------------------------------
+
   if (!TheFunction)
     return nullptr;
 
-   // If this is an operator, install it.
+  // If this is an operator, install it.
   if (P.isBinaryOp())
-    binopPrecedence[P.getOperatorName()] = P.getBinaryPrecedence();
+    ctx.binopPrecedence[P.getOperatorName()] = P.getBinaryPrecedence();
 
   // Create a new basic block to start insertion into.
   llvm::BasicBlock *BB = llvm::BasicBlock::Create(*ctx.theContext, "entry", TheFunction);
@@ -318,16 +312,13 @@ llvm::Function *FunctionAST::codegen(CodegenContext &ctx) {
     // Validate the generated code, checking for consistency.
     llvm::verifyFunction(*TheFunction);
 
-    // Run the optimizer on the function.
-    ctx.TheFPM->run(*TheFunction);
+    // Optimize the function.
+    ctx.theFPM->run(*TheFunction, *ctx.theFAM);
 
     return TheFunction;
   }
 
   // Error reading body, remove function.
   TheFunction->eraseFromParent();
-
-  if (P.isBinaryOp())
-    binopPrecedence.erase(P.getOperatorName());
   return nullptr;
 }
