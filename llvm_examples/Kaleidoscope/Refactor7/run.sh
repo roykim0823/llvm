@@ -1,0 +1,1 @@
+./build/toy < cmd.txt
