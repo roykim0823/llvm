@@ -1,6 +1,6 @@
 #include "lexer.h"
 #include "parser.h"
-#include "ir_gen_ctx.h"
+#include "codegen_ctx.h"
 
 // for obj file generation
 #include "llvm/IR/LegacyPassManager.h"
@@ -11,14 +11,34 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Host.h"
+//===----------------------------------------------------------------------===//
+// "Library" functions that can be "extern'd" from user code.
+//===----------------------------------------------------------------------===//
+
+#ifdef _WIN32
+#define DLLEXPORT __declspec(dllexport)
+#else
+#define DLLEXPORT
+#endif
+
+/// putchard - putchar that takes a double and returns 0.
+extern "C" DLLEXPORT double putchard(double X) {
+  fputc((char)X, stderr);
+  return 0;
+}
+
+/// printd - printf that takes a double prints it as "%f\n", returning 0.
+extern "C" DLLEXPORT double printd(double X) {
+  fprintf(stderr, "%f\n", X);
+  return 0;
+}
 
 //===----------------------------------------------------------------------===//
 // Main driver code.
 //===----------------------------------------------------------------------===//
-int compile_obj(toy::IRGenContext& ctx) {
+int compile_obj(toy::CodegenContext& ctx) {
   auto TargetTriple = llvm::sys::getDefaultTargetTriple();
-  //ctx.theModule->setTargetTriple(llvm::Triple(TargetTriple));
-  ctx.theModule->setTargetTriple(TargetTriple);
+  ctx.theModule->setTargetTriple(llvm::Triple(TargetTriple));
 
   std::string Error;
   auto Target = llvm::TargetRegistry::lookupTarget(TargetTriple, Error);
@@ -36,7 +56,7 @@ int compile_obj(toy::IRGenContext& ctx) {
 
   llvm::TargetOptions opt;
   auto TheTargetMachine = Target->createTargetMachine(
-      TargetTriple, CPU, Features, opt, llvm::Reloc::PIC_);
+      llvm::Triple(TargetTriple), CPU, Features, opt, llvm::Reloc::PIC_);
 
 
   ctx.theModule->setDataLayout(TheTargetMachine->createDataLayout());
@@ -66,15 +86,21 @@ int compile_obj(toy::IRGenContext& ctx) {
   return 0;
 }
 
+
 int main() {
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
     llvm::InitializeNativeTargetAsmParser();
 
     toy::Lexer lexer;
-    toy::IRGenContext ctx;
+    toy::CodegenContext ctx;
     toy::Parser parser(lexer, ctx);
 
+      // Prime the first token.
+    fprintf(stderr, "ready> ");
+    parser.getNextToken();
+
+    ctx.InitializeModuleAndPassManager();
     // Run the main "interpreter loop" now.
     parser.mainLoop();
 

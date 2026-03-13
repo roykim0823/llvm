@@ -5,26 +5,18 @@
 #include <memory>
 
 #include "ast.h"
-#include "codegen_ctx.h"
+#include "ir_gen_ctx.h"
 #include "lexer.h"
-
 
 namespace toy {
 
 class Parser {
 public:
-    Parser(Lexer& lexer, CodegenContext& ctx);
+    Parser(Lexer& lexer, IRGenContext& ctx) : lexer(lexer), ctx(ctx) {
+    }
 
     void mainLoop();
     int getNextToken();  // Reada another token from the lexer and updates curTok
-
-private:
-    Lexer& lexer;
-    CodegenContext& ctx;
-
-    /// CurTok/getNextToken - Provide a simple token buffer.    
-    int curTok;  // Current token the parser is looking at
-
     int getTokPrecedence();
 
     std::unique_ptr<ExprAST> parseExpression();
@@ -33,18 +25,29 @@ private:
     std::unique_ptr<ExprAST> parseIdentifierExpr();
     std::unique_ptr<ExprAST> parseIfExpr();
     std::unique_ptr<ExprAST> parseForExpr();
-    std::unique_ptr<ExprAST> parsePrimary();
-    std::unique_ptr<ExprAST> parseUnary();
-    std::unique_ptr<ExprAST> parseBinOpRHS(int exprPrec, std::unique_ptr<ExprAST> lhs);
-    std::unique_ptr<ExprAST> parseVarExpr();
+    std::unique_ptr<ExprAST> parsePrimary();  // simple warpper for numberexpr/identifierexpr/parenexpr
+    std::unique_ptr<ExprAST> parseUnary();  // for user-define op
+    std::unique_ptr<ExprAST> parseBinOpRHS(int exprPrec, std::unique_ptr<ExprAST> lhs);  // called by parseExpression
+    std::unique_ptr<ExprAST> parseVarExpr();  // to parse mutable variable
     std::unique_ptr<PrototypeAST> parsePrototype();
     std::unique_ptr<FunctionAST> parseDefinition();
-    std::unique_ptr<FunctionAST> parseTopLevelExpr();
+    std::unique_ptr<FunctionAST> parseTopLevelExpr();  // simple wrapper for top-level-expression
     std::unique_ptr<PrototypeAST> parseExtern();
 
+    // Top-level parsing and JIT driver
     void handleDefinition();
     void handleExtern();
     void handleTopLevelExpression();
+
+  private:
+    Lexer& lexer;
+    IRGenContext& ctx;
+    /// CurTok/getNextToken - Provide a simple token buffer.
+    int curTok;  // Current token the parser is looking at
+
+    /// BinopPrecedence - This holds the precedence for each binary operator that is
+    /// defined.
+    // std::map<char, int> binopPrecedence;  // move to IRGenContext as a global variable to support user-defined op
 };
 
 } // end namespace toy

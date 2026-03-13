@@ -1228,7 +1228,7 @@ int main() {
   llvm::InitializeNativeTargetAsmParser();
 
   auto TargetTriple = sys::getDefaultTargetTriple();
-  TheModule->setTargetTriple(Triple(TargetTriple));
+  TheModule->setTargetTriple(TargetTriple);
 
   std::string Error;
   auto Target = TargetRegistry::lookupTarget(TargetTriple, Error);
@@ -1246,7 +1246,7 @@ int main() {
 
   TargetOptions opt;
   auto TheTargetMachine = Target->createTargetMachine(
-      Triple(TargetTriple), CPU, Features, opt, Reloc::PIC_);
+      TargetTriple, CPU, Features, opt, Reloc::PIC_);
 
   TheModule->setDataLayout(TheTargetMachine->createDataLayout());
 

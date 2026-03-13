@@ -9,7 +9,7 @@ namespace toy {
 //===----------------------------------------------------------------------===//
 // The lexer returns tokens [0-255] if it is an unknown character, otherwise one
 // of these for known things.
-// Each token returned by the lexer includes a token code and potentially some
+// Each token returned by the lexer includes a token code and potentially some 
 // metadata.
 enum Token {
   tok_eof = -1,
@@ -29,7 +29,7 @@ enum Token {
   tok_for = -9,
   tok_in = -10,
 
-  // user-defiend operators
+  // operators
   tok_binary = -11,
   tok_unary = -12,
 
@@ -42,7 +42,7 @@ class Lexer {
     int gettok();
     double getNumVal() const { return numVal; }
     std::string getIdentifierStr() const { return identifierStr; }
-
+    
 
     private:
     std::string identifierStr; // Filled in if tok_identifier
