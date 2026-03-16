@@ -27,7 +27,7 @@ llvm::DIType *DebugInfo::getDoubleTy() {
   return DblTy;
 }
 
-void DebugInfo::emitLocation(ExprAST *AST, IRGenContext &ctx) {
+void DebugInfo::emitLocation(ExprAST *AST, CodegenContext &ctx) {
   if (!AST)
     return ctx.builder->SetCurrentDebugLocation(llvm::DebugLoc());
   llvm::DIScope *Scope;

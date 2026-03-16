@@ -5,27 +5,49 @@
 
 using namespace toy;
 
-extern SourceLocation CurLoc;  // Ch9
+// Global Variables
+/// BinopPrecedence - This holds the precedence for each binary operator that is
+/// defined.    
+std::map<char, int> BinopPrecedence;
+extern std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;  // define in ast.cpp
+extern SourceLocation CurLoc;
+// ------------------------------
+
+void init_binop() {
+    // Install standard binary operators.
+    // 1 is lowest precedence.
+    BinopPrecedence['='] = 2;
+    BinopPrecedence['<'] = 10;
+    BinopPrecedence['+'] = 20;
+    BinopPrecedence['-'] = 20;
+    BinopPrecedence['*'] = 40;  
+}
+
+Parser::Parser(Lexer& lexer, CodegenContext& ctx) : lexer(lexer), ctx(ctx) {
+    init_binop();
+}
 
 // Helper to bridge the Lexer to the Parser's CurTok
-int Parser::getNextToken() {
-    return curTok = lexer.gettok();
+int Parser::getNextToken() { 
+    return curTok = lexer.gettok(); 
 }
 
 int Parser::getTokPrecedence() {
     if (!isascii(curTok)) return -1;
-    auto it = ctx.binopPrecedence.find(static_cast<char>(curTok));
-    if (it == ctx.binopPrecedence.end()) return -1;
-    return it->second;
+
+    // Make sure it's a declared binop.
+    int TokPrec = BinopPrecedence[curTok];
+    if (TokPrec == 0) return -1;
+    return TokPrec;
 }
 
 
-// The routine eats all of the tokens that correspond to the production and returns the lexer buffer
+// The routine eats all of the tokens that correspond to the production and returns the lexer buffer 
 // This is a fairly standard recursive descent parser structure.
 // numberexpr ::= number
 std::unique_ptr<ExprAST> Parser::parseNumberExpr() {
     auto result = std::make_unique<NumberExprAST>(lexer.getNumVal());
-    getNextToken();
+    getNextToken(); 
     return std::move(result);
 }
 
@@ -46,12 +68,12 @@ std::unique_ptr<ExprAST> Parser::parseParenExpr() {
 std::unique_ptr<ExprAST> Parser::parseIdentifierExpr() {
     std::string idName = lexer.getIdentifierStr();
 
-    SourceLocation LitLoc = CurLoc;  // Ch9
+    SourceLocation LitLoc = CurLoc;
 
     getNextToken(); // eat identifier
 
     if (curTok != '(')  // Simple variable ref.
-        return std::make_unique<VariableExprAST>(LitLoc, idName);  // Ch9
+        return std::make_unique<VariableExprAST>(LitLoc, idName);
 
     getNextToken(); // eat (
     std::vector<std::unique_ptr<ExprAST>> args;
@@ -68,11 +90,11 @@ std::unique_ptr<ExprAST> Parser::parseIdentifierExpr() {
         }
     }
     getNextToken(); // eat )
-    return std::make_unique<CallExprAST>(LitLoc, idName, std::move(args));  // Ch9
+    return std::make_unique<CallExprAST>(LitLoc, idName, std::move(args));
 }
 
-// ifexpr ::= 'if' expression 'then' expression 'else' expression
-std::unique_ptr<ExprAST> Parser::parseIfExpr() {
+/// ifexpr ::= 'if' expression 'then' expression 'else' expression
+std::unique_ptr<ExprAST> Parser::parseIfExpr()  {
   SourceLocation IfLoc = CurLoc;
   getNextToken(); // eat the if.
 
@@ -183,6 +205,7 @@ std::unique_ptr<ExprAST> Parser::parseVarExpr() {
     if (curTok != tok_identifier)
       return logError("expected identifier list after var");
   }
+
   // At this point, we have to have 'in'.
   if (curTok != tok_in)
     return logError("expected 'in' keyword after 'var'");
@@ -220,7 +243,7 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 std::unique_ptr<ExprAST> Parser::parseUnary() {
   // If the current token is not an operator, it must be a primary expr.
   if (!isascii(curTok) || curTok == '(' || curTok == ',')
-    return parsePrimary();  // parsePrimary() is included in parseUnary()
+    return parsePrimary();
 
   // If this is a unary operator, read it.
   int Opc = curTok;
@@ -230,7 +253,8 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
   return nullptr;
 }
 
-// binoprhs ::= ('+' unary)*
+
+// binoprhs ::= ('+' primary)*
 std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int exprPrec, std::unique_ptr<ExprAST> lhs) {
     while (true) {
         // If this is a binop, find its precedence.
@@ -242,11 +266,10 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int exprPrec, std::unique_ptr<Exp
 
         // Okay, we know this is a binop.
         int binOp = curTok;
-        SourceLocation BinLoc = CurLoc;  // Ch9
+        SourceLocation BinLoc = CurLoc;
         getNextToken(); // eat binop
 
         // Parse the unary expression after the binary operator.
-        // auto rhs = parsePrimary();
         auto rhs = parseUnary();
         if (!rhs) return nullptr;
 
@@ -263,9 +286,8 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int exprPrec, std::unique_ptr<Exp
 }
 
 // expression
-//   ::= unary binoprhs
+//   ::= primary binoprhs
 std::unique_ptr<ExprAST> Parser::parseExpression() {
-    // auto lhs = parsePrimary();
     auto lhs = parseUnary();
     if (!lhs) return nullptr;
     return parseBinOpRHS(0, std::move(lhs));
@@ -278,7 +300,7 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 std::unique_ptr<PrototypeAST> Parser::parsePrototype() {
   std::string FnName;
 
-  SourceLocation FnLoc = CurLoc;  // Ch9
+  SourceLocation FnLoc = CurLoc;
 
   unsigned Kind = 0; // 0 = identifier, 1 = unary, 2 = binary.
   unsigned BinaryPrecedence = 30;
@@ -352,13 +374,14 @@ std::unique_ptr<FunctionAST> Parser::parseDefinition() {
 
 // top-level expression ::= expression
 std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
-    SourceLocation FnLoc = CurLoc;
-    if (auto e = parseExpression()) {
-        // Ch9. make a standalone problem
-        auto proto = std::make_unique<PrototypeAST>(FnLoc, "main", std::vector<std::string>());  // Ch9
-        return std::make_unique<FunctionAST>(std::move(proto), std::move(e));
-    }
-    return nullptr;
+  SourceLocation FnLoc = CurLoc;
+  if (auto E = parseExpression()) {
+    // Make the top-level expression be our "main" function.
+    auto Proto = std::make_unique<PrototypeAST>(FnLoc, "main", 
+                                                 std::vector<std::string>());
+    return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
+  }
+  return nullptr;
 }
 
 /// external ::= 'extern' prototype
@@ -370,7 +393,7 @@ std::unique_ptr<PrototypeAST> Parser::parseExtern() {
 void Parser::handleDefinition() {
   if (auto FnAST = parseDefinition()) {
     if (!FnAST->codegen(ctx))
-      fprintf(stderr, "Error reading function definition:");  // Ch9
+      fprintf(stderr, "Error reading function definition:");
   } else {
     // Skip token for error recovery.
     getNextToken();
@@ -379,11 +402,10 @@ void Parser::handleDefinition() {
 
 void Parser::handleExtern() {
   if (auto ProtoAST = parseExtern()) {
-    if (!ProtoAST->codegen(ctx)) {
-      fprintf(stderr, "Error reading extern");  // Ch9
-    } else {
-      ctx.functionProtos[ProtoAST->getName()] = std::move(ProtoAST);
-    }
+    if (!ProtoAST->codegen(ctx))
+      fprintf(stderr, "Error reading extern");
+    else
+      FunctionProtos[ProtoAST->getName()] = std::move(ProtoAST);
   } else {
     // Skip token for error recovery.
     getNextToken();
@@ -393,7 +415,6 @@ void Parser::handleExtern() {
 void Parser::handleTopLevelExpression() {
   // Evaluate a top-level expression into an anonymous function.
   if (auto FnAST = parseTopLevelExpr()) {
-    // Ch9. remove all JIT code
     if (!FnAST->codegen(ctx)) {
       fprintf(stderr, "Error generating code for top level expr");
     }
@@ -404,9 +425,8 @@ void Parser::handleTopLevelExpression() {
 }
 
 void Parser::mainLoop() {
-    // Ch9. remove the command line code
-    getNextToken(); // Bootstrap the first token
     while (true) {
+        //fprintf(stderr, "ready> ");
         switch (curTok) {
         case tok_eof: return;
         case ';':     getNextToken(); break;  // ignore top-level semicolons.
@@ -414,5 +434,9 @@ void Parser::mainLoop() {
         case tok_extern: handleExtern(); break;
         default:      handleTopLevelExpression(); break;
         }
+        
     }
+    // Print out all of the generated code.
+    //ctx.theModule->print(llvm::errs(), nullptr);
+
 }

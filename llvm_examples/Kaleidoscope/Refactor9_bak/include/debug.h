@@ -4,7 +4,7 @@
 #include "llvm/IR/DIBuilder.h"
 #include <string>
 
-#include "ir_gen_ctx.h"
+#include "codegen_ctx.h"
 
 namespace toy {
 
@@ -16,7 +16,7 @@ struct DebugInfo {
   llvm::DIType *DblTy;
   std::vector<llvm::DIScope *> LexicalBlocks;
 
-  void emitLocation(ExprAST *AST, IRGenContext &ctx);
+  void emitLocation(ExprAST *AST, CodegenContext &ctx);
   llvm::DIType *getDoubleTy();
 };// KSDbgInfo;
 
@@ -27,14 +27,14 @@ struct SourceLocation {
 
 class DebugInfoManager {
     public:
-    DebugInfoManager(IRGenContext &ctx) : ctx(ctx) {}
+    DebugInfoManager(CodegenContext &ctx) : ctx(ctx) {}
     int advance();
-
+    
     // Debug location tracking
-    //SourceLocation curLoc;  // TODO: move the global varble into the this member variable
+    //SourceLocation curLoc;
     SourceLocation lexLoc = {1, 0};
     private:
-    IRGenContext &ctx;
+    CodegenContext &ctx;
 };
 
 llvm::DISubroutineType *CreateFunctionType(unsigned NumArgs);

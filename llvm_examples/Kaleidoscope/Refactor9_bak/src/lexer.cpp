@@ -2,18 +2,17 @@
 #include <cctype>
 
 #include "lexer.h"
-#include "log.h"
 
 using namespace toy;
 
-SourceLocation CurLoc;  // Temp Global variable
+SourceLocation CurLoc;
 
 /// gettok - Return the next token from standard input.
 int Lexer::gettok() {
 
     while (isspace(lastChar))  // Skip any whitespace
         lastChar = dbgMgr.advance();
-
+    
     CurLoc = dbgMgr.lexLoc;
 
     if (isalpha(lastChar)) {  // identifier: [a-zA-Z][a-zA-Z0-9]*
@@ -36,18 +35,6 @@ int Lexer::gettok() {
 
     if (isdigit(lastChar) || lastChar == '.') {  // Number: [0-9.]+
         std::string numStr;
-        if (lastChar == '.') {
-            // If we see a dot, it must be followed by a digit to be a valid number.
-            int nextChar = dbgMgr.advance();
-            if (!isdigit(nextChar)) {
-                // Not a valid number, return the dot as a token.
-                lastChar = nextChar; // Update lastChar to the next character for future calls.
-                return '.';
-            }
-            numStr += "0."; // Prepend a zero for numbers like ".5"
-            lastChar = nextChar; // Update lastChar to the digit after the dot for future calls.
-        }
-
         do {
             numStr += lastChar;
             lastChar = dbgMgr.advance();
@@ -61,7 +48,7 @@ int Lexer::gettok() {
         // Comment until end of line.
         do lastChar = dbgMgr.advance();
         while (lastChar != EOF && lastChar != '\n' && lastChar != '\r');
-
+        
         if (lastChar != EOF) return gettok();
     }
 
