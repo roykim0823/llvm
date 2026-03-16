@@ -1,8 +1,8 @@
 #ifndef LEXER_H
 #define LEXER_H
 
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/ADT/StringRef.h"  // encapsulates a pointer to C string terminated with a zero ('\x00')
+#include "llvm/Support/MemoryBuffer.h"  // read-only access to a block of memory with a tailing zero (`\x00`)
 
 class Lexer;
 
@@ -11,8 +11,8 @@ class Token {
 
 public:
   enum TokenKind : unsigned short {
-    eoi,
-    unknown,
+    eoi,  // end of input
+    unknown,  // error
     ident,
     number,
     comma,

@@ -5,6 +5,13 @@
 #include "Lexer.h"
 #include "llvm/Support/raw_ostream.h"  // LLVM forbids <iostream>
 
+// Grammar of calc in EBNF
+// calc : ("with" ident ("," ident)* ":")? expr ;
+// expr : term (( "+" | "-" ) term)* ;
+// term : factor (( "*" | "/") factor)* ;
+// factor : ident | number | "(" expr ")" ;
+// ident : ([a-zAZ])+ ;
+// number : ([0-9])+ ;
 class Parser {
   Lexer &Lex;
   Token Tok;
@@ -18,8 +25,8 @@ class Parser {
   void advance() { Lex.next(Tok); }
 
   // Expect the current token to be of the given kind.
-  // If so, return false. Otherwise, report an error and return true.  
-  bool expect(Token::TokenKind Kind) {  
+  // If so, return false. Otherwise, report an error and return true.
+  bool expect(Token::TokenKind Kind) {
     if (!Tok.is(Kind)) {
       error();
       return true;
