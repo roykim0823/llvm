@@ -29,3 +29,4 @@ if(LLVM_COMPILER_IS_GCC_COMPATIBLE)
 endif()
 
 add_subdirectory ("src")
+add_subdirectory ("test")

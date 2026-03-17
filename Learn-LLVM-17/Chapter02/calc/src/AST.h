@@ -1,6 +1,7 @@
 #ifndef AST_H
 #define AST_H
 
+#include <memory>
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -21,7 +22,7 @@ public:
 
 class AST {
 public:
-  virtual ~AST() {}
+  virtual ~AST() = default;
   virtual void accept(ASTVisitor &V) = 0;
 };
 
@@ -57,15 +58,15 @@ public:
   enum Operator { Plus, Minus, Mul, Div };
 
 private:
-  Expr *Left;
-  Expr *Right;
+  std::unique_ptr<Expr> Left;
+  std::unique_ptr<Expr> Right;
   Operator Op;
 
 public:
-  BinaryOp(Operator Op, Expr *L, Expr *R)
-      : Op(Op), Left(L), Right(R) {}
-  Expr *getLeft() { return Left; }
-  Expr *getRight() { return Right; }
+  BinaryOp(Operator Op, std::unique_ptr<Expr> L, std::unique_ptr<Expr> R)
+      : Op(Op), Left(std::move(L)), Right(std::move(R)) {}
+  Expr *getLeft() { return Left.get(); }
+  Expr *getRight() { return Right.get(); }
   Operator getOperator() { return Op; }
   virtual void accept(ASTVisitor &V) override {
     V.visit(*this);
@@ -75,15 +76,15 @@ public:
 class WithDecl : public AST {
   using VarVector = llvm::SmallVector<llvm::StringRef, 8>;
   VarVector Vars;
-  Expr *E;
+  std::unique_ptr<Expr> E;
 
 public:
   WithDecl(llvm::SmallVector<llvm::StringRef, 8> Vars,
-           Expr *E)
-      : Vars(Vars), E(E) {}
+           std::unique_ptr<Expr> E)
+      : Vars(Vars), E(std::move(E)) {}
   VarVector::const_iterator begin() { return Vars.begin(); }
   VarVector::const_iterator end() { return Vars.end(); }
-  Expr *getExpr() { return E; }
+  Expr *getExpr() { return E.get(); }
   virtual void accept(ASTVisitor &V) override {
     V.visit(*this);
   }

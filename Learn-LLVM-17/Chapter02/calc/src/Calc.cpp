@@ -18,17 +18,17 @@ int main(int argc, const char **argv) {
 
   Lexer Lex(Input);
   Parser Parser(Lex);
-  AST *Tree = Parser.parse();
+  auto Tree = Parser.parse();
   if (!Tree || Parser.hasError()) {
     llvm::errs() << "Syntax errors occured\n";
     return 1;
   }
   Sema Semantic;
-  if (Semantic.semantic(Tree)) {
+  if (Semantic.semantic(Tree.get())) {
     llvm::errs() << "Semantic errors occured\n";
     return 1;
   }
   CodeGen CodeGenerator;
-  CodeGenerator.compile(Tree);
+  CodeGenerator.compile(Tree.get());
   return 0;
 }

@@ -43,16 +43,16 @@ class Parser {
 
   // For each non-terminal of the grammar,
   // a method to parse the rule is declared
-  AST *parseCalc();
-  Expr *parseExpr();
-  Expr *parseTerm();
-  Expr *parseFactor();
+  std::unique_ptr<AST>  parseCalc();
+  std::unique_ptr<Expr> parseExpr();
+  std::unique_ptr<Expr> parseTerm();
+  std::unique_ptr<Expr> parseFactor();
 
 public:
   Parser(Lexer &Lex) : Lex(Lex), HasError(false) {
     advance();
   }
-  AST *parse();  // main entry point
+  std::unique_ptr<AST> parse();  // main entry point
   bool hasError() { return HasError; }
 };
 

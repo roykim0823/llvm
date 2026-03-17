@@ -55,7 +55,7 @@ public:
 };
 }
 
-bool Sema::semantic(AST *Tree) {
+bool Sema::semantic(AST* Tree) {
   if (!Tree)
     return false;
   DeclCheck Check;

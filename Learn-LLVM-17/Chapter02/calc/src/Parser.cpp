@@ -1,14 +1,14 @@
 #include "Parser.h"
 
-AST *Parser::parse() {
-  AST *Res = parseCalc();
+std::unique_ptr<AST> Parser::parse() {
+  auto Res = parseCalc();
   expect(Token::eoi);
   return Res;
 }
 
-// calc ::= 'with' ident (',' ident)* ':')? expr; 
-AST *Parser::parseCalc() {
-  Expr *E;  // Early declaration due to goto usage
+// calc ::= 'with' ident (',' ident)* ':')? expr;
+std::unique_ptr<AST>  Parser::parseCalc() {
+  std::unique_ptr<Expr> E;  // Early declaration due to goto usage
   llvm::SmallVector<llvm::StringRef, 8> Vars;
   if (Tok.is(Token::KW_with)) {
     advance();
@@ -32,9 +32,9 @@ AST *Parser::parseCalc() {
   if (expect(Token::eoi))
     goto _error;
   if (Vars.empty())
-    return E;
+    return E;  // unique_ptr<Expr> implicitly converts to unique_ptr<AST>
   else
-    return new WithDecl(Vars, E);  // return the created AST WithDecl(Vars, E) node
+    return std::make_unique<WithDecl>(Vars, std::move(E));  // return the created AST WithDecl(Vars, E) node
 
 _error:
   while (Tok.getKind() != Token::eoi)
@@ -43,42 +43,42 @@ _error:
 }
 
 // expr : term (( "+" | "-" ) term)* ;
-Expr *Parser::parseExpr() {
-  Expr *Left = parseTerm();
+std::unique_ptr<Expr> Parser::parseExpr() {
+  auto Left = parseTerm();
   // the use of isOneOf() to simplify the check for several tokens
   while (Tok.isOneOf(Token::plus, Token::minus)) {
     BinaryOp::Operator Op = Tok.is(Token::plus)
                                 ? BinaryOp::Plus
                                 : BinaryOp::Minus;
     advance();
-    Expr *Right = parseTerm();
-    Left = new BinaryOp(Op, Left, Right);
+    auto Right = parseTerm();
+    Left = std::make_unique<BinaryOp>(Op, std::move(Left), std::move(Right));
   }
   return Left;
 }
 
 // term : factor ( ( "*" | "/" ) factor )* ;
-Expr *Parser::parseTerm() {
-  Expr *Left = parseFactor();
+std::unique_ptr<Expr> Parser::parseTerm() {
+  auto Left = parseFactor();
   while (Tok.isOneOf(Token::star, Token::slash)) {
     BinaryOp::Operator Op =
         Tok.is(Token::star) ? BinaryOp::Mul : BinaryOp::Div;
     advance();
-    Expr *Right = parseFactor();
-    Left = new BinaryOp(Op, Left, Right);
+    auto Right = parseFactor();
+    Left = std::make_unique<BinaryOp>(Op, std::move(Left), std::move(Right));
   }
   return Left;
 }
 
 // factor : ident | number | "(" expr ")" ;
-Expr *Parser::parseFactor() {
-  Expr *Res = nullptr;
+std::unique_ptr<Expr> Parser::parseFactor() {
+  std::unique_ptr<Expr> Res = nullptr;
   switch (Tok.getKind()) {
   case Token::number:
-    Res = new Factor(Factor::Number, Tok.getText());
+    Res = std::make_unique<Factor>(Factor::Number, Tok.getText());
     advance(); break;
   case Token::ident:
-    Res = new Factor(Factor::Ident, Tok.getText());
+    Res = std::make_unique<Factor>(Factor::Ident, Tok.getText());
     advance(); break;
   case Token::l_paren:
     advance();
