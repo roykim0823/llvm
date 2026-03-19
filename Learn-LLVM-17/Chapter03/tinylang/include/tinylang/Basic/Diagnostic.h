@@ -15,6 +15,15 @@ namespace diag {
 enum {
 #define DIAG(ID, Level, Msg) ID,
 #include "tinylang/Basic/Diagnostic.def"
+/*
+After the preprocessing
+enum {
+  // Expansion of #include "tinylang/Basic/Diagnostic.def"
+  err_unterminated_block_comment,
+  err_unterminated_char_or_string,
+  ...
+  }
+*/
 };
 } // namespace diag
 

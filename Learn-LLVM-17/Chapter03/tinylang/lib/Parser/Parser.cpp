@@ -20,9 +20,13 @@ ModuleDeclaration *Parser::parse() {
   return ModDecl;
 }
 
+/*
+compilationUnit
+  : "MODULE" identifier ";" ( import )* block identifier "." ;
+*/
 bool Parser::parseCompilationUnit(ModuleDeclaration *&D) {
   auto _errorhandler = [this] { return skipUntil(); };
-  if (consume(tok::kw_MODULE))
+  if (consume(tok::kw_MODULE))  // expect() and advance()
     return _errorhandler();
   if (expect(tok::identifier))
     return _errorhandler();
@@ -52,6 +56,10 @@ bool Parser::parseCompilationUnit(ModuleDeclaration *&D) {
   return false;
 }
 
+/*
+import
+  : ( "FROM" identifier )? "IMPORT" identList ";" ;
+*/
 bool Parser::parseImport() {
   auto _errorhandler = [this] {
     return skipUntil(tok::kw_BEGIN, tok::kw_CONST,
@@ -79,6 +87,14 @@ bool Parser::parseImport() {
   return false;
 }
 
+/*
+block
+  : ( declaration )* ( "BEGIN" statementSequence )? "END" ;
+declaration
+  : "CONST" ( constantDeclaration ";" )*
+  | "VAR" ( variableDeclaration ";" )*
+  | procedureDeclaration ";" ;
+*/
 bool Parser::parseBlock(DeclList &Decls, StmtList &Stmts) {
   auto _errorhandler = [this] {
     return skipUntil(tok::identifier);
@@ -98,6 +114,12 @@ bool Parser::parseBlock(DeclList &Decls, StmtList &Stmts) {
   return false;
 }
 
+/*
+declaration
+  : "CONST" ( constantDeclaration ";" )*
+  | "VAR" ( variableDeclaration ";" )*
+  | procedureDeclaration ";" ;
+*/
 bool Parser::parseDeclaration(DeclList &Decls) {
   auto _errorhandler = [this] {
     return skipUntil(tok::kw_BEGIN, tok::kw_CONST,
@@ -132,6 +154,10 @@ bool Parser::parseDeclaration(DeclList &Decls) {
   return false;
 }
 
+/*
+constantDeclaration
+  : identifier "=" expression ;
+*/
 bool Parser::parseConstantDeclaration(DeclList &Decls) {
   auto _errorhandler = [this] {
     return skipUntil(tok::semi);
@@ -152,6 +178,10 @@ bool Parser::parseConstantDeclaration(DeclList &Decls) {
   return false;
 }
 
+/*
+variableDeclaration
+  : identList ":" qualident ;
+*/
 bool Parser::parseVariableDeclaration(DeclList &Decls) {
   auto _errorhandler = [this] {
     return skipUntil(tok::semi);
@@ -168,6 +198,11 @@ bool Parser::parseVariableDeclaration(DeclList &Decls) {
   return false;
 }
 
+/*
+procedureDeclaration
+  : "PROCEDURE" identifier ( formalParameters )? ";"
+    block identifier ;
+*/
 bool Parser::parseProcedureDeclaration(
     DeclList &ParentDecls) {
   auto _errorhandler = [this] {
@@ -209,6 +244,10 @@ bool Parser::parseProcedureDeclaration(
   return false;
 }
 
+/*
+formalParameters
+  : "(" ( formalParameterList )? ")" ( ":" qualident )? ;
+*/
 bool Parser::parseFormalParameters(FormalParamList &Params,
                                    Decl *&RetType) {
   auto _errorhandler = [this] {
@@ -230,6 +269,10 @@ bool Parser::parseFormalParameters(FormalParamList &Params,
   return false;
 }
 
+/*
+formalParameterList
+  : formalParameter (";" formalParameter )* ;
+*/
 bool Parser::parseFormalParameterList(
     FormalParamList &Params) {
   auto _errorhandler = [this] {
@@ -245,6 +288,10 @@ bool Parser::parseFormalParameterList(
   return false;
 }
 
+/*
+formalParameter
+  : ( "VAR" )? identList ":" qualident ;
+*/
 bool Parser::parseFormalParameter(FormalParamList &Params) {
   auto _errorhandler = [this] {
     return skipUntil(tok::r_paren, tok::semi);
@@ -267,6 +314,10 @@ bool Parser::parseFormalParameter(FormalParamList &Params) {
   return false;
 }
 
+/*
+statementSequence
+  : statement ( ";" statement )* ;
+*/
 bool Parser::parseStatementSequence(StmtList &Stmts) {
   auto _errorhandler = [this] {
     return skipUntil(tok::kw_ELSE, tok::kw_END);
@@ -281,6 +332,11 @@ bool Parser::parseStatementSequence(StmtList &Stmts) {
   return false;
 }
 
+/*
+statement
+  : qualident ( ":=" expression | ( "(" ( expList )? ")" )? )
+  | ifStatement | whileStatement | "RETURN" ( expression )? ;
+*/
 bool Parser::parseStatement(StmtList &Stmts) {
   auto _errorhandler = [this] {
     return skipUntil(
@@ -328,10 +384,15 @@ bool Parser::parseStatement(StmtList &Stmts) {
   return false;
 }
 
+/*
+ifStatement
+  : "IF" expression "THEN" statementSequence
+    ( "ELSE" statementSequence )? "END" ;
+*/
 bool Parser::parseIfStatement(StmtList &Stmts) {
   auto _errorhandler = [this] {
     return skipUntil(
-        tok::semi, tok::kw_ELSE, tok::kw_END);
+        tok::semi, tok::kw_ELSE, tok::kw_END);    // Skip Until it confronts the FOLLOW SET
   };
   Expr *E = nullptr;
   StmtList IfStmts, ElseStmts;
@@ -357,6 +418,10 @@ bool Parser::parseIfStatement(StmtList &Stmts) {
   return false;
 }
 
+/*
+whileStatement
+  : "WHILE" expression "DO" statementSequence "END" ;
+*/
 bool Parser::parseWhileStatement(StmtList &Stmts) {
   auto _errorhandler = [this] {
     return skipUntil(
@@ -399,6 +464,10 @@ bool Parser::parseReturnStatement(StmtList &Stmts) {
   return false;
 }
 
+/*
+expList
+  : expression ( "," expression )* ;
+*/
 bool Parser::parseExpList(ExprList &Exprs) {
   auto _errorhandler = [this] {
     return skipUntil(tok::r_paren);
@@ -419,6 +488,10 @@ bool Parser::parseExpList(ExprList &Exprs) {
   return false;
 }
 
+/*
+expression
+  : simpleExpression ( relation simpleExpression )? ;
+*/
 bool Parser::parseExpression(Expr *&E) {
   auto _errorhandler = [this] {
     return skipUntil(tok::r_paren, tok::comma, tok::semi,
@@ -441,6 +514,10 @@ bool Parser::parseExpression(Expr *&E) {
   return false;
 }
 
+/*
+relation
+  : "=" | "#" | "<" | "<=" | ">" | ">=" ;ß
+*/
 bool Parser::parseRelation(OperatorInfo &Op) {
   auto _errorhandler = [this] {
     return skipUntil(tok::l_paren, tok::plus, tok::minus,
@@ -472,6 +549,10 @@ bool Parser::parseRelation(OperatorInfo &Op) {
   return false;
 }
 
+/*
+simpleExpression
+  : ( "+" | "-" )? term ( addOperator term )* ;
+*/
 bool Parser::parseSimpleExpression(Expr *&E) {
   auto _errorhandler = [this] {
     return skipUntil(
@@ -507,6 +588,10 @@ bool Parser::parseSimpleExpression(Expr *&E) {
   return false;
 }
 
+/*
+addOperator
+  : "+" | "-" | "OR" ;
+*/
 bool Parser::parseAddOperator(OperatorInfo &Op) {
   auto _errorhandler = [this] {
     return skipUntil(tok::l_paren, tok::kw_NOT,
@@ -529,6 +614,10 @@ bool Parser::parseAddOperator(OperatorInfo &Op) {
   return false;
 }
 
+/*
+term
+  : factor ( mulOperator factor )* ;
+*/
 bool Parser::parseTerm(Expr *&E) {
   auto _errorhandler = [this] {
     return skipUntil(tok::hash, tok::r_paren, tok::plus,
@@ -553,6 +642,10 @@ bool Parser::parseTerm(Expr *&E) {
   return false;
 }
 
+/*
+mulOperator
+  : "*" | "/" | "DIV" | "MOD" | "AND" ;
+*/
 bool Parser::parseMulOperator(OperatorInfo &Op) {
   auto _errorhandler = [this] {
     return skipUntil(tok::l_paren, tok::kw_NOT,
@@ -581,6 +674,11 @@ bool Parser::parseMulOperator(OperatorInfo &Op) {
   return false;
 }
 
+/*
+factor
+  : integer_literal | "(" expression ")" | "NOT" factor
+  | qualident ( "(" ( expList )? ")" )? ;
+*/
 bool Parser::parseFactor(Expr *&E) {
   auto _errorhandler = [this] {
     return skipUntil(
@@ -643,6 +741,10 @@ bool Parser::parseFactor(Expr *&E) {
   return false;
 }
 
+/*
+qualident
+  : identifier ( "." identifier )* ;
+*/
 bool Parser::parseQualident(Decl *&D) {
   auto _errorhandler = [this] {
     return skipUntil(
@@ -673,10 +775,15 @@ bool Parser::parseQualident(Decl *&D) {
   return false;
 }
 
+/*
+identList
+  : identifier ( "," identifier)* ;
+*/
 bool Parser::parseIdentList(IdentList &Ids) {
   auto _errorhandler = [this] {
     return skipUntil(tok::colon, tok::semi);
   };
+
   if (expect(tok::identifier))
     return _errorhandler();
   Ids.push_back(std::pair<SMLoc, StringRef>(

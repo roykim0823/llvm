@@ -1,0 +1,69 @@
+# Unit tests
+# T1: Fetch and Enable GoogleTest
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/heads/main.zip
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE  # Add this line
+)
+
+# T2: Add test executable
+FetchContent_MakeAvailable(googletest)
+
+# Link the required LLVM components
+# Based on your error log, you need Support (for ostreams/MemoryBuffer)
+# and potentially others if not inherited.
+llvm_map_components_to_libnames(llvm_libs Support)
+
+enable_testing()
+
+add_executable(Diagnostic_test
+    Diagnostic_test.cpp ../lib/Basic/Diagnostic.cpp
+)
+target_include_directories(Diagnostic_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(Diagnostic_test PRIVATE gtest_main ${llvm_libs} tinylangBasic)
+
+add_executable(TokenKinds_test
+    TokenKinds_test.cpp ../lib/Basic/TokenKinds.cpp
+)
+target_include_directories(TokenKinds_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(TokenKinds_test PRIVATE gtest_main ${llvm_libs} tinylangBasic)
+
+add_executable(Lexer_test
+    Lexer_test.cpp ../lib/Lexer/Lexer.cpp
+)
+target_include_directories(Lexer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(Lexer_test PRIVATE gtest_main ${llvm_libs} tinylangLexer)
+
+# add_executable(Parser_test
+#     Parser_test.cpp ../src/lexer.cpp ../src/parser.cpp
+# )
+# target_include_directories(Parser_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# target_link_libraries(Parser_test PRIVATE gtest_main ${llvm_libs})
+
+# add_executable(AST_test
+#     AST_test.cpp ../src/lexer.cpp ../src/parser.cpp ../src/Sema.cpp
+# )
+# target_include_directories(AST_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# target_link_libraries(AST_test PRIVATE gtest_main ${llvm_libs})
+
+# add_executable(Sema_test
+#     Sema_test.cpp ../src/lexer.cpp ../src/parser.cpp ../src/Sema.cpp
+# )
+# target_include_directories(Sema_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# target_link_libraries(Sema_test PRIVATE gtest_main ${llvm_libs})
+
+# add_executable(CodeGen_test
+#     CodeGen_test.cpp ../src/lexer.cpp ../src/parser.cpp ../src/Sema.cpp ../src/CodeGen.cpp
+# )
+# target_include_directories(CodeGen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# target_link_libraries(CodeGen_test PRIVATE gtest_main ${llvm_libs})
+
+
+# Discover tests automatically
+include(GoogleTest)
+gtest_discover_tests(Diagnostic_test PROPERTIES NO_PRETTY_VALUES TRUE)
+gtest_discover_tests(TokenKinds_test PROPERTIES NO_PRETTY_VALUES TRUE)
+gtest_discover_tests(Lexer_test PROPERTIES NO_PRETTY_VALUES TRUE)
+# gtest_discover_tests(Sema_test PROPERTIES NO_PRETTY_VALUES TRUE)
+# gtest_discover_tests(CodeGen_test PROPERTIES NO_PRETTY_VALUES TRUE)

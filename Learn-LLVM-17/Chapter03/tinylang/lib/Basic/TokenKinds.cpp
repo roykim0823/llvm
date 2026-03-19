@@ -4,11 +4,28 @@
 using namespace tinylang;
 
 static const char * const TokNames[] = {
-#define TOK(ID) #ID,
+#define TOK(ID) #ID,  // # is the stringizing operator
 #define KEYWORD(ID, FLAG) #ID,
 #include "tinylang/Basic/TokenKinds.def"
   nullptr
 };
+/*
+// Redefines TOK to wrap the ID in quotes (#ID)
+// Redefines KEYWORD to wrap the ID in quotes
+static const char * const TokNames[] = {
+  "unknown",
+  "eof",
+  "identifier",
+  "integer_literal",
+  "string_literal",
+  "plus",
+  "minus",
+  "AND",
+  "BEGIN",
+  // ... (all other tokens and keywords)
+  nullptr
+};
+*/
 
 const char *tok::getTokenName(TokenKind Kind) {
   if (Kind < tok::NUM_TOKENS)
@@ -32,5 +49,14 @@ const char *tok::getKeywordSpelling(TokenKind Kind) {
 #include "tinylang/Basic/TokenKinds.def"
     default: break;
   }
+/*
+switch (Kind) {
+    case kw_AND: return "AND";
+    case kw_BEGIN: return "BEGIN";
+    case kw_CONST: return "CONST";
+    // ... (Note how kw_ is prepended to the ID)
+    default: break;
+  }
+*/
   return nullptr;
 }

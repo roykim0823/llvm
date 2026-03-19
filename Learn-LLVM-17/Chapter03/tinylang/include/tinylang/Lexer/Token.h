@@ -11,7 +11,7 @@ namespace tinylang {
 class Lexer;
 
 class Token {
-  friend class Lexer;
+  friend class Lexer;  // So, no set..()
 
   const char *Ptr;  // The location of the token.
   size_t Length;    // The length of the token.
