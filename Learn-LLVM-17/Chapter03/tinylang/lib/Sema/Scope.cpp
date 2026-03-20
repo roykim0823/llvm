@@ -7,7 +7,7 @@ bool Scope::insert(Decl *Declaration) {
   return Symbols
       .insert(std::pair<StringRef, Decl *>(
           Declaration->getName(), Declaration))
-      .second;
+      .second;  // std::pair<iterator, bool> insert(...) -> .second returns the bool
 }
 
 Decl *Scope::lookup(StringRef Name) {

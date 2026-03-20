@@ -41,30 +41,17 @@ add_executable(Parser_test
 target_include_directories(Parser_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(Parser_test PRIVATE gtest_main gmock ${llvm_libs} tinylangParser tinylangSema)
 
-# add_executable(Parser_test
-#     Parser_test.cpp ../src/lexer.cpp ../src/parser.cpp
-# )
-# target_include_directories(Parser_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-# target_link_libraries(Parser_test PRIVATE gtest_main ${llvm_libs})
+add_executable(Scope_test
+    Scope_test.cpp ../lib/Sema/Scope.cpp
+)
+target_include_directories(Scope_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(Scope_test PRIVATE gtest_main gmock ${llvm_libs})
 
-# add_executable(AST_test
-#     AST_test.cpp ../src/lexer.cpp ../src/parser.cpp ../src/Sema.cpp
-# )
-# target_include_directories(AST_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-# target_link_libraries(AST_test PRIVATE gtest_main ${llvm_libs})
-
-# add_executable(Sema_test
-#     Sema_test.cpp ../src/lexer.cpp ../src/parser.cpp ../src/Sema.cpp
-# )
-# target_include_directories(Sema_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-# target_link_libraries(Sema_test PRIVATE gtest_main ${llvm_libs})
-
-# add_executable(CodeGen_test
-#     CodeGen_test.cpp ../src/lexer.cpp ../src/parser.cpp ../src/Sema.cpp ../src/CodeGen.cpp
-# )
-# target_include_directories(CodeGen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-# target_link_libraries(CodeGen_test PRIVATE gtest_main ${llvm_libs})
-
+add_executable(Sema_test
+    Sema_test.cpp ../lib/Sema/Scope.cpp ../lib/Sema/Sema.cpp
+)
+target_include_directories(Sema_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(Sema_test PRIVATE gtest_main ${llvm_libs} tinylangSema)
 
 # Discover tests automatically
 include(GoogleTest)
@@ -72,4 +59,5 @@ gtest_discover_tests(Diagnostic_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(TokenKinds_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(Lexer_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(Parser_test PROPERTIES NO_PRETTY_VALUES TRUE)
-# gtest_discover_tests(CodeGen_test PROPERTIES NO_PRETTY_VALUES TRUE)
+gtest_discover_tests(Scope_test PROPERTIES NO_PRETTY_VALUES TRUE)
+gtest_discover_tests(Sema_test PROPERTIES NO_PRETTY_VALUES TRUE)
