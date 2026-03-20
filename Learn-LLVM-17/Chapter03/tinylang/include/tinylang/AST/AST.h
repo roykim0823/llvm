@@ -55,6 +55,7 @@ protected:
   StringRef Name;
 
 public:
+  Decl(DeclKind Kind = DK_Module): Kind(Kind) {};  // HK: for mockup
   Decl(DeclKind Kind, Decl *EnclosingDecL, SMLoc Loc,
        StringRef Name)
       : Kind(Kind), EnclosingDecL(EnclosingDecL), Loc(Loc),
@@ -71,6 +72,7 @@ class ModuleDeclaration : public Decl {
   StmtList Stmts;
 
 public:
+  ModuleDeclaration() {};  // HK: for mock design
   ModuleDeclaration(Decl *EnclosingDecL, SMLoc Loc,
                     StringRef Name)
       : Decl(DK_Module, EnclosingDecL, Loc, Name) {}
@@ -88,7 +90,7 @@ public:
 
   // To determine if a given Decel is a ModuleDeclaration
   // All subclass of Decl must implement this method for LLVM-style RTTI
-  static bool classof(const Decl *D) {  
+  static bool classof(const Decl *D) {
     return D->getKind() == DK_Module;
   }
 };

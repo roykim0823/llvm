@@ -24,6 +24,7 @@ class Parser {
 
   void advance() { Lex.next(Tok); }
 
+  protected:  // private -> protected to make them visible in googleTest
   bool expect(tok::TokenKind ExpectedTok) {
     if (Tok.is(ExpectedTok)) {
       return false;

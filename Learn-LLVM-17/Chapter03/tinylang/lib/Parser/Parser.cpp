@@ -26,7 +26,7 @@ compilationUnit
 */
 bool Parser::parseCompilationUnit(ModuleDeclaration *&D) {
   auto _errorhandler = [this] { return skipUntil(); };
-  if (consume(tok::kw_MODULE))  // expect() and advance()
+  if (consume(tok::kw_MODULE))  // check TokenKind and advance()
     return _errorhandler();
   if (expect(tok::identifier))
     return _errorhandler();

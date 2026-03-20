@@ -35,6 +35,12 @@ add_executable(Lexer_test
 target_include_directories(Lexer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(Lexer_test PRIVATE gtest_main ${llvm_libs} tinylangLexer)
 
+add_executable(Parser_test
+    Parser_test.cpp ../lib/Parser/Parser.cpp ../lib/Sema/Sema.cpp
+)
+target_include_directories(Parser_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(Parser_test PRIVATE gtest_main gmock ${llvm_libs} tinylangParser tinylangSema)
+
 # add_executable(Parser_test
 #     Parser_test.cpp ../src/lexer.cpp ../src/parser.cpp
 # )
@@ -65,5 +71,5 @@ include(GoogleTest)
 gtest_discover_tests(Diagnostic_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(TokenKinds_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(Lexer_test PROPERTIES NO_PRETTY_VALUES TRUE)
-# gtest_discover_tests(Sema_test PROPERTIES NO_PRETTY_VALUES TRUE)
+gtest_discover_tests(Parser_test PROPERTIES NO_PRETTY_VALUES TRUE)
 # gtest_discover_tests(CodeGen_test PROPERTIES NO_PRETTY_VALUES TRUE)
