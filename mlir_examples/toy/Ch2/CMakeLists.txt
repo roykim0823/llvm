@@ -1,6 +1,9 @@
 # For a better template to copy, see examples/standalone
 cmake_minimum_required(VERSION 3.20)
-set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0")
+# Remove the hardcoded deployment target for macOS, and set it conditionally based on the platform.
+if(APPLE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0" CACHE STRING "macOS Deployment Target" FORCE)
+endif()
 project(toy-ch2)
 
 # 1. Find the packages FIRST
@@ -23,7 +26,7 @@ include_directories(${MLIR_INCLUDE_DIRS}
 # --------------------------------------------------------
 # The original CMakeLists.txt had the following structure,
 # Unnecessary statements have been commented out.
-# -------------------------------------------------------- 
+# --------------------------------------------------------
 add_subdirectory(include)
 
 set(LLVM_LINK_COMPONENTS
