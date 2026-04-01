@@ -1,3 +1,4 @@
+./build/toyc-ch5 ../../test_Example/Toy/Ch5/affine-lowering.mlir -emit=mlir -opt
 ./build/toyc-ch5 ../../test_Example/Toy/Ch5/affine-lowering.mlir -emit=mlir-affine
 echo ""
 echo "---------"
