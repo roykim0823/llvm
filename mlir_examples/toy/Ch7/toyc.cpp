@@ -51,6 +51,9 @@
 #include <system_error>
 #include <utility>
 
+// FIX: To use mlir::createReconcileUnrealizedCastsPass
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+
 using namespace toy;
 namespace cl = llvm::cl;
 
@@ -185,6 +188,17 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   if (isLoweringToLLVM) {
     // Finish lowering the toy IR to the LLVM dialect.
     pm.addPass(mlir::toy::createLowerToLLVMPass());
+
+    // FIX: Segmentation fault when this pass is not added.
+    // When lowering from Toy Dialect to the LLVM Dialect, MLIR often
+    // creates "bridge" operations called unrealized_conversion_cast.
+    // These casts are just placeholders. If they aren't removed before sent to JIT,
+    // the JIT encounters an operation it doesn't recognize as valid LLVM IR and crashes (segfault).
+    // This pass looks for pairs of these casts (e.g., Toy Type -> LLMV Type
+    // followed by LLVM Type -> Toy Type) and deletes them, leaving "clean" LLVM
+    // module that the JIT can actually execute.
+    pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+
     // This is necessary to have line tables emitted and basic
     // debugger working. In the future we will add proper debug information
     // emission directly from our frontend.
