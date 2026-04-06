@@ -55,12 +55,9 @@ add_dependencies(toyc-ch3 ToyCh3CombineIncGen)
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include/)
+
 target_link_libraries(toyc-ch3
   PRIVATE
-    #MLIRAnalysis
-    #MLIRFunctionInterfaces
-    #MLIRIR
-    MLIRParser
-    #MLIRPass
-    #MLIRSideEffectInterfaces
-    MLIRTransforms)
+    MLIR                      # libMLIR.dylib (all dialects, passes, conversions)
+    LLVM                      # libLLVM.dylib (all targets, all components)
+    )

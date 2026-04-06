@@ -48,12 +48,9 @@ add_dependencies(toyc-ch2 ToyCh2OpsIncGen)  # Added to fix include dependency fo
 
 include_directories(include/)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include/)
+
 target_link_libraries(toyc-ch2
   PRIVATE
-    #MLIRAnalysis
-    #MLIRFunctionInterfaces
-    #MLIRIR
-    MLIRParser
-    #MLIRSideEffectInterfaces
-    MLIRTransforms
-)
+    MLIR                      # libMLIR.dylib (all dialects, passes, conversions)
+    LLVM                      # libLLVM.dylib (all targets, all components)
+    )
