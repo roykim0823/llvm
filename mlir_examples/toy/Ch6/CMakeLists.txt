@@ -38,13 +38,6 @@ endif()
 include_directories(include)
 add_subdirectory(include)
 
-set(LLVM_LINK_COMPONENTS
-  Core
-  Support
-  nativecodegen
-  OrcJIT
-  )
-
 set(LLVM_TARGET_DEFINITIONS mlir/ToyCombine.td)
 mlir_tablegen(ToyCombine.inc -gen-rewriters)
 add_public_tablegen_target(ToyCh6CombineIncGen)

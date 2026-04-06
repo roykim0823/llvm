@@ -25,10 +25,6 @@ include_directories(${MLIR_INCLUDE_DIRS}
 # The original CMakeLists.txt had the following structure,
 # Unnecessary statements have been commented out.
 # --------------------------------------------------------
-set(LLVM_LINK_COMPONENTS
-  Support
-  )
-
 add_executable(toyc-ch1
   toyc.cpp
   parser/AST.cpp

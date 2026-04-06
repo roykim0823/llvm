@@ -29,19 +29,11 @@ include_directories(${MLIR_INCLUDE_DIRS}
 # --------------------------------------------------------
 add_subdirectory(include)
 
-set(LLVM_LINK_COMPONENTS
-  Support
-  )
-
 add_executable(toyc-ch2
   toyc.cpp
   parser/AST.cpp
   mlir/MLIRGen.cpp
   mlir/Dialect.cpp
-
-  # DEPENDS
-  # ToyCh2OpsIncGen
-
   )
 
 add_dependencies(toyc-ch2 ToyCh2OpsIncGen)  # Added to fix include dependency for toy/Dialect.h.inc

@@ -31,10 +31,6 @@ include_directories(${MLIR_INCLUDE_DIRS}
 include_directories(include)
 add_subdirectory(include)
 
-set(LLVM_LINK_COMPONENTS
-  Support
-  )
-
 set(LLVM_TARGET_DEFINITIONS mlir/ToyCombine.td)
 mlir_tablegen(ToyCombine.inc -gen-rewriters)
 add_public_tablegen_target(ToyCh3CombineIncGen)
@@ -45,11 +41,8 @@ add_executable(toyc-ch3  # add_toy_chapter -> add_executable
   mlir/MLIRGen.cpp
   mlir/Dialect.cpp
   mlir/ToyCombine.cpp
-
-  # DEPENDS
-  # ToyCh3OpsIncGen
-  # ToyCh3CombineIncGen
   )
+
 add_dependencies(toyc-ch3 ToyCh3OpsIncGen)
 add_dependencies(toyc-ch3 ToyCh3CombineIncGen)
 

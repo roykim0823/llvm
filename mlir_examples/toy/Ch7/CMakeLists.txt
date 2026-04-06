@@ -38,13 +38,6 @@ endif()
 include_directories(include)
 add_subdirectory(include)
 
-set(LLVM_LINK_COMPONENTS
-  Core
-  Support
-  nativecodegen
-  OrcJIT
-  )
-
 set(LLVM_TARGET_DEFINITIONS mlir/ToyCombine.td)
 mlir_tablegen(ToyCombine.inc -gen-rewriters)
 add_public_tablegen_target(ToyCh7CombineIncGen)
@@ -58,11 +51,6 @@ add_executable(toyc-ch7
   mlir/LowerToLLVM.cpp
   mlir/ShapeInferencePass.cpp
   mlir/ToyCombine.cpp
-
-  # DEPENDS
-  # ToyCh7ShapeInferenceInterfaceIncGen
-  # ToyCh7OpsIncGen
-  # ToyCh7CombineIncGen
   )
 
 add_dependencies(toyc-ch7 ToyCh7ShapeInferenceInterfaceIncGen)

@@ -31,10 +31,6 @@ include_directories(${MLIR_INCLUDE_DIRS}
 include_directories(include)
 add_subdirectory(include)
 
-set(LLVM_LINK_COMPONENTS
-  Support
-  )
-
 set(LLVM_TARGET_DEFINITIONS mlir/ToyCombine.td)
 mlir_tablegen(ToyCombine.inc -gen-rewriters)
 add_public_tablegen_target(ToyCh4CombineIncGen)
@@ -46,11 +42,6 @@ add_executable(toyc-ch4
   mlir/Dialect.cpp
   mlir/ShapeInferencePass.cpp
   mlir/ToyCombine.cpp
-
-  # DEPENDS
-  # ToyCh4OpsIncGen
-  # ToyCh4ShapeInferenceInterfaceIncGen
-  # ToyCh4CombineIncGen
   )
 
 add_dependencies(toyc-ch4 ToyCh4OpsIncGen)
