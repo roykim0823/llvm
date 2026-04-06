@@ -84,7 +84,11 @@ createTargetMachine(const char *Argv0) {
   }
 
   llvm::TargetMachine *TM = Target->createTargetMachine(
+#if __clang_major__ <= 20
+      Triple.getTriple(), CPUStr, FeatureStr, TargetOptions,
+#else
       Triple, CPUStr, FeatureStr, TargetOptions,  // Triple.getTriple() -> Triple in llvm21
+#endif
       std::optional<llvm::Reloc::Model>(
           codegen::getRelocModel()));
   return TM;

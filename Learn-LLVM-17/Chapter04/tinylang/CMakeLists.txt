@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.20.0)
+# Remove the hardcoded deployment target for macOS, and set it conditionally based on the platform.
+if(APPLE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0" CACHE STRING "macOS Deployment Target" FORCE)
+endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(Tinylang)
