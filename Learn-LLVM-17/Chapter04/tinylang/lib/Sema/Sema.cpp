@@ -334,8 +334,13 @@ Expr *Sema::actOnTerm(Expr *Left, Expr *Right,
   if (IsConst && Op.getKind() == tok::kw_AND) {
     BooleanLiteral *L = dyn_cast<BooleanLiteral>(Left);
     BooleanLiteral *R = dyn_cast<BooleanLiteral>(Right);
-    return L->getValue() && R->getValue() ? TrueLiteral
-                                          : FalseLiteral;
+    // HK: Crash! If Left was an IntegerLiteral, L is a nullptr.
+    // L->getValue() dereferences that nullptr!
+    //return L->getValue() && R->getValue() ? TrueLiteral
+    //                                      : FalseLiteral;
+    if (L && R) {
+      return L->getValue() && R->getValue() ? TrueLiteral : FalseLiteral;
+    }
   }
   return new InfixExpression(Left, Right, Op, Ty, IsConst);
 }

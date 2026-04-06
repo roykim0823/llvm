@@ -37,10 +37,10 @@ public:
         Diags(Diags) {
     initialize();
   }
-  virtual ~Sema() = default;
+  virtual ~Sema() = default;  // HK: for mock design
   void initialize();
 
-  // Make function virtual to be used in Mockup
+  // HK: Make function virtual to be used in Mockup
   virtual ModuleDeclaration *actOnModuleDeclaration(SMLoc Loc,
                                             StringRef Name);
   virtual void actOnModuleDeclaration(ModuleDeclaration *ModDecl,
@@ -48,6 +48,7 @@ public:
                               DeclList &Decls,
                               StmtList &Stmts);
   virtual void actOnImport(StringRef ModuleName, IdentList &Ids);
+  // HK: --------------------------------------------------------
   void actOnConstantDeclaration(DeclList &Decls, SMLoc Loc,
                                 StringRef Name, Expr *E);
   void actOnVariableDeclaration(DeclList &Decls,

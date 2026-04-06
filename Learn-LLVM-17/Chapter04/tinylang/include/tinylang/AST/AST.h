@@ -55,6 +55,7 @@ protected:
   StringRef Name;
 
 public:
+  Decl(DeclKind Kind = DK_Module): Kind(Kind) {};  // HK: for mockup
   Decl(DeclKind Kind, Decl *EnclosingDecL, SMLoc Loc,
        StringRef Name)
       : Kind(Kind), EnclosingDecL(EnclosingDecL), Loc(Loc),
@@ -71,6 +72,7 @@ class ModuleDeclaration : public Decl {
   StmtList Stmts;
 
 public:
+  ModuleDeclaration() {};  // HK: for mock design
   ModuleDeclaration(Decl *EnclosingDecL, SMLoc Loc,
                     StringRef Name)
       : Decl(DK_Module, EnclosingDecL, Loc, Name) {}
