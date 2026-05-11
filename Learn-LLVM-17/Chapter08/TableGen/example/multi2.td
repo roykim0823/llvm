@@ -28,7 +28,7 @@ multiclass InstWithOps<string mnemonic, int opcode> {
   }
 }
 
-multiclass InstWithOps2<string mnemonic, int opcode> {
+multiclass InstWithOpsv<string mnemonic, int opcode> {
   foreach I = [RegOp, ImmOp, MemOp] in {
     defvar Name = I.Name;
     defvar Suffix = I.Suffix;
@@ -37,5 +37,5 @@ multiclass InstWithOps2<string mnemonic, int opcode> {
   }
 }
 
-//defm ADD : InstWithOps<"add", 0xA0>;
-defm ADD : InstWithOps2<"add", 0xA0>;
+defm ADD : InstWithOps<"add", 0xA0>;
+defm ADDv : InstWithOpsv<"addv", 0xA0>;
