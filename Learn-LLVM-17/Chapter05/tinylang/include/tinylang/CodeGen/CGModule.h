@@ -1,3 +1,16 @@
+/// \file
+/// \brief Module-level code generation.
+///
+/// \note Ch05 deltas vs Ch04:
+///   - constructor takes an \ref tinylang::ASTContext (Ch04 took only the
+///     LLVM \ref llvm::Module),
+///   - \ref tinylang::CGModule::convertType "convertType" now dispatches via
+///     LLVM-style RTTI on the new \ref tinylang::TypeDeclaration hierarchy
+///     (`Pervasive`/`Alias`/`Array`/`Pointer`/`Record`),
+///   - a \ref TypeCache memoises the LLVM type produced for each
+///     compound \ref tinylang::TypeDeclaration so a record/array shared
+///     across decls maps to one \ref llvm::Type.
+
 #ifndef TINYLANG_CODEGEN_CGMODULE_H
 #define TINYLANG_CODEGEN_CGMODULE_H
 
@@ -14,6 +27,8 @@ class CGModule {
 
   ModuleDeclaration *Mod;
 
+  /// Memoised mapping from tinylang compound types (array/record/alias) to
+  /// their materialised LLVM type. Added in Ch05.
   llvm::DenseMap<TypeDeclaration *, llvm::Type *> TypeCache;
 
   // Repository of global objects.

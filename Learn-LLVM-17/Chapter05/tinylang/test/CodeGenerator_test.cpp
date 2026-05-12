@@ -1,3 +1,12 @@
+/// \file
+/// \brief End-to-end tests for \ref tinylang::CodeGenerator.
+///
+/// Ch05 reorients the fixture: builds an \ref tinylang::ASTContext from a
+/// dummy `SourceMgr`/filename and passes it through the new
+/// `CodeGenerator::create(Ctx, ASTCtx, TM)` signature. Coverage of the
+/// resulting module (name, triple, data layout, global/function counts) is
+/// the same as Ch04.
+
 #include "tinylang/CodeGen/CodeGenerator.h"
 #include "tinylang/AST/AST.h"
 #include "tinylang/AST/ASTContext.h"

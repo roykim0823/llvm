@@ -1,3 +1,10 @@
+/// \file
+/// \brief Top-level entry point for tinylang's LLVM IR code generation.
+///
+/// \note Ch05 threads an \ref tinylang::ASTContext through the factory and
+/// the constructor (so debug info and other source-aware features can reach
+/// the source manager); the rest of the façade is unchanged from Ch04.
+
 #ifndef TINYLANG_CODEGEN_CODEGENERATOR_H
 #define TINYLANG_CODEGEN_CODEGENERATOR_H
 
@@ -10,7 +17,7 @@ namespace tinylang {
 
 class CodeGenerator {
   llvm::LLVMContext &Ctx;
-  ASTContext &ASTCtx;
+  ASTContext &ASTCtx;          ///< Added in Ch05 — passed on to CGModule.
   llvm::TargetMachine *TM;
 
 protected:

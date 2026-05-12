@@ -190,6 +190,13 @@ void Sema::actOnProcedureDeclaration(
   ProcDecl->setStmts(Stmts);
 }
 
+/// Builds an \ref AssignmentStatement, type-checking the RHS against the LHS.
+///
+/// \note Ch04 added the \ref FormalParameterDeclaration branch so that
+/// assignments to (VAR) formal parameters are also accepted. Any other
+/// declaration kind on the LHS now reports
+/// \ref diag::err_not_yet_implemented "err_not_yet_implemented" with the
+/// `"other assignments"` argument instead of the silent TODO in Ch03.
 void Sema::actOnAssignment(StmtList &Stmts, SMLoc Loc,
                            Decl *D, Expr *E) {
   if (auto Var = dyn_cast<VariableDeclaration>(D)) {

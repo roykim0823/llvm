@@ -1,3 +1,11 @@
+/// \file
+/// \brief End-to-end tests for \ref tinylang::CodeGenerator (Chapter 4).
+///
+/// Builds a hand-rolled \ref tinylang::ModuleDeclaration "ModuleDeclaration"
+/// (no parser involved), runs the code generator, and asserts on the shape
+/// of the resulting \ref llvm::Module — name, target triple, data layout,
+/// global/function counts.
+
 #include "tinylang/CodeGen/CodeGenerator.h"
 #include "tinylang/AST/AST.h"
 #include "llvm/IR/LLVMContext.h"

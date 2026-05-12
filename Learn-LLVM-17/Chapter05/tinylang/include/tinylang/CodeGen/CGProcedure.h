@@ -1,3 +1,18 @@
+/// \file
+/// \brief Procedure-level code generation.
+///
+/// \note Ch05 deltas vs Ch04:
+///   - \ref readVariable takes a `LoadVal` flag — pass `false` to obtain
+///     the address (used as a GEP base on the LHS of an assignment),
+///   - \ref mapType no longer takes a `HonorReference` flag; VAR formal
+///     parameters are wrapped to `ptr` via `PointerType::getUnqual`,
+///   - new \ref createBasicBlock helper replaces every
+///     `BasicBlock::Create(Ctx, Name, Fn)` call,
+///   - \ref DIVariables is a side table reserved for debug info,
+///   - \ref emitExpr / \ref emitStmt now consume the new
+///     \ref tinylang::Designator selector chain (`a[i]`, `r.f`, `p^`) by
+///     emitting GEPs and loads/stores.
+
 #ifndef TINYLANG_CODEGEN_CGPROCEDURE_H
 #define TINYLANG_CODEGEN_CGPROCEDURE_H
 
@@ -57,11 +72,16 @@ class CGProcedure {
   llvm::DenseMap<FormalParameterDeclaration *,
                  llvm::Argument *>
       FormalParams;
+  /// Side table for debug-info local variables (added in Ch05; filled
+  /// only when `-g` is active).
   llvm::DenseMap<Decl *, llvm::DILocalVariable *>
       DIVariables;
 
   void writeVariable(llvm::BasicBlock *BB, Decl *Decl,
                      llvm::Value *Val);
+  /// Reads \p Decl in \p BB. With `LoadVal = false` returns the address
+  /// (used as a GEP base when generating LHS code for assignments to
+  /// compound designators). (Ch05)
   llvm::Value *readVariable(llvm::BasicBlock *BB,
                             Decl *Decl, bool LoadVal = true);
 
@@ -77,6 +97,8 @@ protected:
     Builder.SetInsertPoint(Curr);
   }
 
+  /// Convenience wrapper around \ref llvm::BasicBlock::Create
+  /// pinned to the current function. (Ch05)
   llvm::BasicBlock *createBasicBlock(
       const llvm::Twine &Name,
       llvm::BasicBlock *InsertBefore = nullptr) {
@@ -101,6 +123,8 @@ public:
         Curr(nullptr){};
 
   void run(ProcedureDeclaration *Proc);
+  /// Placeholder no-arg overload added in Ch05 (reserved for the upcoming
+  /// debug-info / late-finalisation pass; currently a no-op).
   void run();
 };
 } // namespace tinylang

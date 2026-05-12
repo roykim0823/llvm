@@ -1,3 +1,6 @@
+/// \file
+/// \brief Implementation of \ref tinylang::CGModule (Chapter 4).
+
 #include "tinylang/CodeGen/CGModule.h"
 #include "tinylang/CodeGen/CGProcedure.h"
 #include "llvm/ADT/StringExtras.h"

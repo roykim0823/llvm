@@ -1,3 +1,16 @@
+/// \file
+/// \brief The `tinylang` Chapter-4 driver — frontend **plus** LLVM
+/// back-end emission.
+///
+/// Difference from the Chapter-3 driver:
+///   - takes a single positional input file (`-` for stdin) instead of a list,
+///   - registers LLVM `codegen` command-line flags (target/mcpu/mattr/…),
+///   - adds `-o`, `-mtriple`, and `--emit-llvm` options,
+///   - builds a \ref llvm::TargetMachine via \ref createTargetMachine,
+///   - on a clean parse, instantiates \ref tinylang::CodeGenerator and writes
+///     the resulting \ref llvm::Module out as assembly, object, or `.ll` IR
+///     via \ref emit using an LLVM legacy pass manager.
+
 #include "tinylang/Basic/Diagnostic.h"
 #include "tinylang/Basic/Version.h"
 #include "tinylang/CodeGen/CodeGenerator.h"
@@ -47,6 +60,8 @@ static llvm::cl::opt<bool> EmitLLVM(
 
 static const char *Head = "tinylang - Tinylang compiler";
 
+/// `--version` handler. Prints the tinylang version, default target triple,
+/// host CPU, and the full list of LLVM-registered targets.
 void printVersion(llvm::raw_ostream &OS) {
   OS << Head << " " << getTinylangVersion() << "\n";
   OS << "  Default target: "
@@ -60,6 +75,9 @@ void printVersion(llvm::raw_ostream &OS) {
   exit(EXIT_SUCCESS);
 }
 
+/// Builds a \ref llvm::TargetMachine from the LLVM `codegen` command-line
+/// flags (`-mtriple`, `-mcpu`, `-mattr`, `--relocation-model`, …). Returns
+/// `nullptr` and reports the error via \ref llvm::WithColor on failure.
 llvm::TargetMachine *
 createTargetMachine(const char *Argv0) {
   llvm::Triple Triple = llvm::Triple(
@@ -94,6 +112,13 @@ createTargetMachine(const char *Argv0) {
   return TM;
 }
 
+/// Writes \p M to \p OutputFilename (or one derived from \p InputFilename)
+/// using a legacy pass manager.
+///
+/// Output format follows the LLVM `--filetype=` flag, with one tinylang
+/// override: `--filetype=asm --emit-llvm` prints textual IR (`.ll`) via
+/// \ref llvm::createPrintModulePass instead of running the back-end
+/// asm-printer pipeline.
 bool emit(StringRef Argv0, llvm::Module *M,
           llvm::TargetMachine *TM,
           StringRef InputFilename) {

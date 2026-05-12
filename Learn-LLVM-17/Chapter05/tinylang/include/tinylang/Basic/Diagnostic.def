@@ -37,5 +37,7 @@ DIAG(err_function_requires_return, Error, "Function requires RETURN with value")
 DIAG(err_procedure_requires_empty_return, Error, "Procedure does not allow RETURN with value")
 DIAG(err_function_and_return_type, Error, "Type of RETURN value is not compatible with function type")
 
+/// Ch05 reverts the Ch04 `{0}`-placeholder variant: the only caller
+/// (\ref Sema::actOnImport) now uses the fixed-message form again.
 DIAG(err_not_yet_implemented, Error, "module imports are not yet implemented")
 #undef DIAG

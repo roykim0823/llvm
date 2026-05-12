@@ -26,6 +26,10 @@ using SelectorList = std::vector<Selector *>;
 using StmtList = std::vector<Stmt *>;
 using IdentList = std::vector<std::pair<SMLoc, StringRef>>;
 
+/// Single `RECORD` field — name + type at a location.
+///
+/// \note Ch05 replaces the prior `Ident` helper. Records are represented by
+/// \ref RecordTypeDeclaration as an ordered `FieldList`.
 class Field {
   SMLoc Loc;
   StringRef Name;
@@ -116,6 +120,14 @@ public:
   }
 };
 
+/// Abstract base for every type declaration.
+///
+/// \note Ch05 expands the Ch04 design (where `TypeDeclaration` was concrete
+/// and used only for the predeclared `INTEGER`/`BOOLEAN`) into a small
+/// hierarchy: \ref PervasiveTypeDeclaration, \ref AliasTypeDeclaration,
+/// \ref ArrayTypeDeclaration, \ref PointerTypeDeclaration, and
+/// \ref RecordTypeDeclaration. The constructor is now `protected`; only
+/// concrete subclasses are instantiable.
 class TypeDeclaration : public Decl {
 protected:
   TypeDeclaration(DeclKind Kind, Decl *EnclosingDecL,
@@ -129,6 +141,7 @@ public:
   }
 };
 
+/// `TYPE Name = OtherType;` — a synonym for another type. (Ch05)
 class AliasTypeDeclaration : public TypeDeclaration {
   TypeDeclaration *Type;
 
@@ -147,6 +160,10 @@ public:
   }
 };
 
+/// `TYPE Name = ARRAY [Nums] OF Type;` — fixed-size array. (Ch05)
+///
+/// \ref Nums is a const-INTEGER expression (currently expected to be an
+/// \ref IntegerLiteral); \ref Type is the element type.
 class ArrayTypeDeclaration : public TypeDeclaration {
   Expr *Nums;
   TypeDeclaration *Type;
@@ -167,6 +184,11 @@ public:
   }
 };
 
+/// Predeclared built-in type (`INTEGER`, `BOOLEAN`). (Ch05)
+///
+/// \note Ch04 used the plain `TypeDeclaration` for these — Ch05 introduces
+/// this dedicated subclass so \ref CGModule::convertType can dispatch on
+/// type kind via LLVM-style RTTI.
 class PervasiveTypeDeclaration : public TypeDeclaration {
 public:
   PervasiveTypeDeclaration(Decl *EnclosingDecL, SMLoc Loc,
@@ -179,6 +201,7 @@ public:
   }
 };
 
+/// `TYPE Name = POINTER TO Type;` — pointer type. (Ch05)
 class PointerTypeDeclaration : public TypeDeclaration {
   TypeDeclaration *Type;
 
@@ -197,6 +220,7 @@ public:
   }
 };
 
+/// `TYPE Name = RECORD f1, f2: T1; f3: T2; … END;` — record type. (Ch05)
 class RecordTypeDeclaration : public TypeDeclaration {
   FieldList Fields;
 
@@ -400,6 +424,12 @@ public:
   }
 };
 
+/// One step inside a \ref Designator: an index `[i]`, a field `.f`, or a
+/// pointer dereference `^`. (Ch05)
+///
+/// Selectors chain off a base variable/parameter; their stored \ref Type is
+/// the *result* type of applying this selector (so the chain terminates at
+/// the type that flows into \ref Designator::getType).
 class Selector {
 public:
   enum SelectorKind {
@@ -424,6 +454,7 @@ public:
   TypeDeclaration *getType() const { return Type; }
 };
 
+/// `[index]` selector — array element access. (Ch05)
 class IndexSelector : public Selector {
   Expr *Index;
 
@@ -438,6 +469,8 @@ public:
   }
 };
 
+/// `.fieldName` selector — record field access. Stores the field's
+/// resolved \p Index in its record (for GEP). (Ch05)
 class FieldSelector : public Selector {
   uint32_t Index;
   StringRef Name;
@@ -456,6 +489,7 @@ public:
   }
 };
 
+/// `^` selector — pointer dereference. (Ch05)
 class DereferenceSelector : public Selector {
 public:
   DereferenceSelector(TypeDeclaration *Type)
@@ -466,6 +500,12 @@ public:
   }
 };
 
+/// A variable/parameter reference, optionally followed by selectors. (Ch05)
+///
+/// \note Replaces Ch04's `VariableAccess`. A bare `Designator(Var)` is the
+/// scalar case; \ref addSelector chains `[i]` / `.f` / `^` operations and
+/// keeps the recorded \ref getType in sync with the result type of the
+/// last applied selector.
 class Designator : public Expr {
   Decl *Var;
   SelectorList Selectors;
@@ -546,6 +586,11 @@ public:
   StmtKind getKind() const { return Kind; }
 };
 
+/// `Designator := E;` — assignment.
+///
+/// \note Ch05 narrows the LHS type from Ch04's `Decl *` to
+/// \ref Designator *, since the target may now include selectors
+/// (`a[i] := …`, `p^.x := …`).
 class AssignmentStatement : public Stmt {
   Designator *Var;
   Expr *E;

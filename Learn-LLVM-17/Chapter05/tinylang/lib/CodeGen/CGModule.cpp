@@ -1,3 +1,13 @@
+/// \file
+/// \brief Implementation of \ref tinylang::CGModule.
+///
+/// Ch05 deltas vs Ch04:
+///   - constructor now takes an \ref tinylang::ASTContext;
+///   - \ref convertType dispatches on the new \ref TypeDeclaration
+///     subclasses and memoises results in `TypeCache`;
+///   - a global `-g` command-line flag is registered (debug-info hook;
+///     consumed by upcoming chapters).
+
 #include "tinylang/CodeGen/CGModule.h"
 #include "tinylang/CodeGen/CGProcedure.h"
 #include "llvm/ADT/StringExtras.h"
@@ -5,6 +15,8 @@
 
 using namespace tinylang;
 
+/// Ch05: registers the `-g` flag. Currently parsed but otherwise unused —
+/// the debug-info pipeline is wired up in a later chapter.
 static llvm::cl::opt<bool>
     Debug("g", llvm::cl::desc("Generate debug information"),
           llvm::cl::init(false));
@@ -23,6 +35,18 @@ void CGModule::initialize() {
       llvm::ConstantInt::get(Int32Ty, 0, /*isSigned*/ true);
 }
 
+/// Maps a tinylang \ref TypeDeclaration to its LLVM counterpart.
+///
+/// Ch05 expansion vs Ch04: dispatches on the new
+/// `Pervasive/Alias/Array/Pointer/Record` hierarchy and caches results
+/// in \ref TypeCache so a record/array shared across decls produces
+/// exactly one \ref llvm::Type.
+///   - `PervasiveTypeDeclaration` → `i64` / `i1`,
+///   - `AliasTypeDeclaration`     → recurse on the aliased type,
+///   - `ArrayTypeDeclaration`     → `[N x ElemTy]` (N must be a const int),
+///   - `RecordTypeDeclaration`    → named `StructType` of field types.
+/// `PointerTypeDeclaration` falls through to the fatal-error tail and is
+/// expected to be handled at lowering sites that build opaque pointers.
 llvm::Type *CGModule::convertType(TypeDeclaration *Ty) {
   if (llvm::Type *T = TypeCache[Ty])
     return T;

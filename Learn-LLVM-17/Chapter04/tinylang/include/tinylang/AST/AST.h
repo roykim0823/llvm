@@ -373,8 +373,14 @@ public:
   StmtKind getKind() const { return Kind; }
 };
 
+/// `Var := E;` — assignment statement.
+///
+/// \note In Chapter 4 the target was widened from `VariableDeclaration *` to
+/// `Decl *` so that VAR formal parameters (which lower to pointers and need
+/// a store) can also appear on the left-hand side. See the matching branch
+/// in \ref tinylang::Sema::actOnAssignment "Sema::actOnAssignment".
 class AssignmentStatement : public Stmt {
-  Decl *Var;
+  Decl *Var;     ///< Variable, or VAR-formal-parameter, being assigned.
   Expr *E;
 
 public:

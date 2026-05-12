@@ -1,3 +1,17 @@
+/// \file
+/// \brief The `tinylang` Chapter-5 driver — frontend + LLVM back-end
+/// emission, with the new `ASTContext` plumbed through.
+///
+/// Deltas vs the Ch04 driver:
+///   - input is again a *list* of positional files (`cl::list`) — back to
+///     the Ch03 behaviour — and the whole pipeline runs once per file,
+///   - an \ref tinylang::ASTContext is constructed alongside the
+///     `SourceMgr` and passed to \ref tinylang::CodeGenerator::create,
+///   - textual LLVM IR is now emitted via `M->print(Out->os(), nullptr)`
+///     directly (instead of `createPrintModulePass`), so the legacy
+///     PassManager is only built when targeting asm/object output,
+///   - assembly text output uses `OF_Text` (Ch04 used `OF_TextWithCRLF`).
+
 #include "tinylang/Basic/Diagnostic.h"
 #include "tinylang/Basic/Version.h"
 #include "tinylang/CodeGen/CodeGenerator.h"

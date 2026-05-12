@@ -1,3 +1,18 @@
+/// \file
+/// \brief Unit tests for \ref tinylang::CGModule.
+///
+/// Inherits the Ch04 suites and adds Ch05-specific cases at the bottom:
+///   - \ref ConvertArrayType / \ref ConvertRecordType / \ref ConvertAliasType —
+///     `convertType()` on the new compound type declarations,
+///   - \ref ConvertTypeIsCached — `TypeCache` returns the same `llvm::Type`
+///     for repeated lookups,
+///   - mangler now covers `Point::AssignX` (matches the symbol emitted from
+///     `examples/Point.mod`).
+///
+/// All fixtures now thread an \ref tinylang::ASTContext into
+/// \ref tinylang::CGModule and use \ref PervasiveTypeDeclaration for
+/// INTEGER/BOOLEAN.
+
 #include "tinylang/CodeGen/CGModule.h"
 #include "tinylang/AST/AST.h"
 #include "tinylang/AST/ASTContext.h"

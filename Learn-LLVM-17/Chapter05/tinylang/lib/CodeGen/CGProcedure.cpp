@@ -1,3 +1,20 @@
+/// \file
+/// \brief Implementation of \ref tinylang::CGProcedure.
+///
+/// Ch05 deltas vs Ch04 (changes are concentrated in the read/write/emit
+/// path, see the per-function notes below):
+///   - \ref CGProcedure::readVariable gains a \c LoadVal flag — `false`
+///     yields the address (used as the GEP base for LHS-of-assignment),
+///   - \ref CGProcedure::mapType drops the `HonorReference` flag and
+///     wraps VAR formal parameters with `PointerType::getUnqual`,
+///   - \ref CGProcedure::emitExpr now walks \ref Designator selectors and
+///     emits in-bounds GEP + load for `[i]` / `.f` / `^`,
+///   - \ref CGProcedure::emitStmt(AssignmentStatement *) does the
+///     mirror-image write side: GEP + store when the destination has
+///     selectors,
+///   - WHILE statement reuses the current block as `while.cond` when it
+///     happens to be empty (skips an unnecessary branch).
+
 #include "tinylang/CodeGen/CGProcedure.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/Support/Casting.h"

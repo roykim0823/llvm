@@ -1,3 +1,6 @@
+/// \file
+/// \brief Implementation of \ref tinylang::CodeGenerator (Chapter 4).
+
 #include "tinylang/CodeGen/CodeGenerator.h"
 #include "tinylang/CodeGen/CGProcedure.h"
 #include "llvm/ADT/SmallString.h"

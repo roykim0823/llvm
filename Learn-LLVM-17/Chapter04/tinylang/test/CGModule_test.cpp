@@ -1,3 +1,17 @@
+/// \file
+/// \brief Unit tests for \ref tinylang::CGModule (Chapter 4).
+///
+/// Exercises:
+///   - \ref tinylang::CGModule::initialize "initialize()" — the cached
+///     primitive types/constants are populated and have the expected widths,
+///   - \ref tinylang::CGModule::convertType "convertType()" — `INTEGER` →
+///     `i64`, `BOOLEAN` → `i1`,
+///   - \ref tinylang::CGModule::mangleName "mangleName()" — length-prefixed
+///     mangling along a \ref tinylang::Decl chain,
+///   - \ref tinylang::CGModule::run "run()" — top-level
+///     `VariableDeclaration`s become module globals retrievable via
+///     \ref tinylang::CGModule::getGlobal "getGlobal()".
+
 #include "tinylang/CodeGen/CGModule.h"
 #include "tinylang/AST/AST.h"
 #include "llvm/IR/LLVMContext.h"

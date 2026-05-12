@@ -1,3 +1,14 @@
+/// \file
+/// \brief Unit tests for \ref tinylang::CGProcedure (Chapter 4).
+///
+/// Three parametric test suites:
+///   - **Signatures** — function-type generation across return-type and
+///     parameter shapes (value + VAR params),
+///   - **InfixOps** — every binary operator emits the expected LLVM
+///     instruction (`add nsw`, `icmp sle`, `and`, …),
+///   - **ControlFlow** — IF (with/without ELSE) and WHILE produce the
+///     expected basic-block labels and verify clean.
+
 #include "tinylang/CodeGen/CGProcedure.h"
 #include "tinylang/CodeGen/CGModule.h"
 #include "tinylang/AST/AST.h"

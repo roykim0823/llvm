@@ -1,3 +1,13 @@
+/// \file
+/// \brief Implementation of \ref tinylang::CGProcedure (Chapter 4).
+///
+/// The SSA construction routines (\ref CGProcedure::readLocalVariable,
+/// \ref CGProcedure::readLocalVariableRecursive,
+/// \ref CGProcedure::sealBlock) implement the on-the-fly variant of Braun et
+/// al.'s algorithm: definitions are tracked per basic block, phi nodes are
+/// inserted lazily on first use, and \ref CGProcedure::optimizePhi removes
+/// trivial phis along the way.
+
 #include "tinylang/CodeGen/CGProcedure.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -5,7 +15,7 @@
 
 using namespace tinylang;
 
-// Store the current value of a local variable in a basic block
+/// Records \p Val as the current definition of \p Decl in \p BB.
 void CGProcedure::writeLocalVariable(llvm::BasicBlock *BB,
                                      Decl *Decl,
                                      llvm::Value *Val) {

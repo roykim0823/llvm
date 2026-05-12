@@ -1,3 +1,22 @@
+/// \file
+/// \brief Implementation of \ref tinylang::Sema.
+///
+/// Ch05 deltas vs Ch04 (only the new/changed actions get notes below):
+///   - INTEGER/BOOLEAN are now built as \ref PervasiveTypeDeclaration,
+///   - \ref Sema::actOnAliasTypeDeclaration,
+///     \ref Sema::actOnArrayTypeDeclaration,
+///     \ref Sema::actOnPointerTypeDeclaration,
+///     \ref Sema::actOnRecordTypeDeclaration,
+///     \ref Sema::actOnFieldDeclaration — new type-declaration actions for
+///     `TYPE Name = …`,
+///   - \ref Sema::actOnDesignator replaces Ch04's `actOnVariable`,
+///   - \ref Sema::actOnIndexSelector,
+///     \ref Sema::actOnFieldSelector,
+///     \ref Sema::actOnDereferenceSelector — append selectors to a
+///     \ref Designator,
+///   - \ref Sema::actOnAssignment now takes the LHS as an \ref Expr
+///     (must be a \ref Designator).
+
 #include "tinylang/Sema/Sema.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"

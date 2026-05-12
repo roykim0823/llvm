@@ -1,3 +1,11 @@
+/// \file
+/// \brief Unit tests for \ref tinylang::CGProcedure.
+///
+/// Ch05 updates the Ch04 fixture: passes an \ref tinylang::ASTContext into
+/// \ref tinylang::CGModule and constructs INTEGER/BOOLEAN as
+/// \ref PervasiveTypeDeclaration. The parametric suites (Signatures /
+/// InfixOps / ControlFlow) themselves are unchanged in coverage.
+
 #include "tinylang/CodeGen/CGProcedure.h"
 #include "tinylang/CodeGen/CGModule.h"
 #include "tinylang/AST/AST.h"
