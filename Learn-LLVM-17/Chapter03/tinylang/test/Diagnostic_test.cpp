@@ -1,3 +1,11 @@
+/// \file
+/// \brief Unit tests for tinylang::DiagnosticsEngine.
+///
+/// Strategy: enumerate every diagnostic ID via the same X-macro trick the
+/// engine itself uses, then assert that reporting each ID either increments
+/// or doesn't increment the error count depending on its declared severity.
+/// Adding a new entry to `Diagnostic.def` is automatically covered.
+
 #include "tinylang/Basic/Diagnostic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
@@ -34,7 +42,9 @@ protected:
 
   DiagnosticEngineTest() : Diags(SrcMgr) {}
 
-  // FIX: Correct way to get SMLoc from SourceMgr
+  // Build an SMLoc that PrintMessage can actually map back to a source
+  // line. Using SMLoc() alone works but produces a bare "<unknown>:" line in
+  // the captured output, which makes failures harder to diagnose.
   llvm::SMLoc getLoc() {
     auto MemBuffer = llvm::MemoryBuffer::getMemBuffer("test content", "test.mod");
     unsigned BufID = SrcMgr.AddNewSourceBuffer(std::move(MemBuffer), llvm::SMLoc());

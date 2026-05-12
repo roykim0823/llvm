@@ -1,3 +1,12 @@
+/// \file
+/// \brief Implementation of \ref tinylang::Lexer and \ref tinylang::KeywordFilter.
+///
+/// The dispatch is character-class based: identifiers start with a letter,
+/// numbers with a digit, strings with `'` or `"`, nested comments with `(*`.
+/// Each helper advances `CurPtr` to the byte past the token and calls
+/// \ref tinylang::Lexer::formToken to populate the supplied
+/// \ref tinylang::Token "Token".
+
 #include "tinylang/Lexer/Lexer.h"
 
 using namespace tinylang;

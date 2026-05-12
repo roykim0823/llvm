@@ -1,3 +1,16 @@
+/// \file
+/// \brief Implementation of the recursive-descent \ref tinylang::Parser.
+///
+/// Each `parseXxx` function corresponds to a non-terminal in the grammar
+/// and follows the same shape:
+///   1. install a local `_errorhandler` lambda that calls
+///      \ref tinylang::Parser::skipUntil with the synchronizing tokens for
+///      this production,
+///   2. match the production using \ref tinylang::Parser::expect and
+///      \ref tinylang::Parser::consume,
+///   3. call the matching `Sema::actOn…` to build the AST node,
+///   4. return `false` on success, `true` on parse error.
+
 #include "tinylang/Parser/Parser.h"
 #include "tinylang/Basic/TokenKinds.h"
 

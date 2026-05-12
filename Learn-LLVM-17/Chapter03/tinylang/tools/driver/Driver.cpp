@@ -1,3 +1,14 @@
+/// \file
+/// \brief The `tinylang` Chapter-3 driver — a frontend-only entry point.
+///
+/// For each `.mod` file on the command line it
+///   1. loads the file into a fresh `llvm::SourceMgr`,
+///   2. spins up a \ref tinylang::DiagnosticsEngine,
+///       \ref tinylang::Lexer, \ref tinylang::Sema, \ref tinylang::Parser,
+///   3. calls \ref tinylang::Parser::parse() and discards the AST.
+///
+/// No code is emitted in Ch03; later chapters add an output stage.
+
 #include "tinylang/Basic/Diagnostic.h"
 #include "tinylang/Basic/Version.h"
 #include "tinylang/Parser/Parser.h"

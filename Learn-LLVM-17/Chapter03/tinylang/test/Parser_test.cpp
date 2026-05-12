@@ -1,3 +1,22 @@
+/// \file
+/// \brief Unit tests for tinylang::Parser using a mocked tinylang::Sema.
+///
+/// The parser is decoupled from the AST by going through `Sema::actOn…`.
+/// We exploit that by subclassing Sema with gmock and asserting *which*
+/// actions the parser fires for a given input. Two suites:
+///  - `ParserCompilationUnitTest` exercises `parseCompilationUnit`. Each
+///    parameter row pairs a source snippet with the expected error count,
+///    the expected return value of the parse method, and which of the two
+///    `actOnModuleDeclaration` overloads should be invoked.
+///  - `ParserImportTest` does the same for `parseImport`.
+///
+/// Two non-obvious requirements that this test relies on (search the
+/// headers for "HK: for mock design"):
+///  - `Sema::actOnModuleDeclaration` and `Sema::actOnImport` are declared
+///    `virtual` so gmock's `MOCK_METHOD` can override them.
+///  - `ModuleDeclaration` has a no-argument constructor so we can keep a
+///    stack-allocated dummy to return from the mocked first overload.
+
 #include "tinylang/Parser/Parser.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
@@ -27,13 +46,19 @@ public:
   MOCK_METHOD(void, actOnImport, (StringRef ModuleName, IdentList &Ids));
 };
 
+// Parameters of one parser test case.
+//
+// `ExpectedErrors` counts only the diagnostics that go through `expect()` —
+// missing-but-required tokens. Errors that go through `consume()` (e.g. a
+// missing leading keyword that the parser silently bails on) are NOT
+// counted; that's why some failing-input cases below have ExpectedErrors=0.
 struct TestParam {
   std::string TestName;
   std::string Source;
-  unsigned ExpectedErrors;  // from expect() not comsume()
-  bool ExpectSemaCall1;
-  bool ExpectSemaCall2;
-  bool Expected;
+  unsigned ExpectedErrors;
+  bool ExpectSemaCall1;   ///< First (heading-only) actOnModuleDeclaration overload.
+  bool ExpectSemaCall2;   ///< Second (final, five-arg) actOnModuleDeclaration overload.
+  bool Expected;          ///< Expected return value of parseCompilationUnit/parseImport.
 };
 
 class ParserTester{
@@ -58,13 +83,14 @@ TEST_P(ParserCompilationUnitTest, ValidateBranches) {
   auto Lex = makeLexer(Param.Source);
   ParserTestee P(*Lex, Actions);
 
-  // Inside your test case
-  ModuleDeclaration DummyModule; // Create a stack-allocated dummy
+  // Stack-allocated stand-in for the AST node the real Sema would have
+  // returned. The parser only uses the pointer to thread state through to
+  // the second actOnModuleDeclaration call, so a dummy is enough.
+  ModuleDeclaration DummyModule;
 
   if (Param.ExpectSemaCall1) {
     EXPECT_CALL(Actions, actOnModuleDeclaration(_, _))
     .WillOnce(Return(&DummyModule));
-    //EXPECT_CALL(Actions, actOnModuleDeclaration(_, _)).Times(AtLeast(1));
   } else {
     EXPECT_CALL(Actions, actOnModuleDeclaration(_, _)).Times(0);
   }
@@ -77,8 +103,6 @@ TEST_P(ParserCompilationUnitTest, ValidateBranches) {
 
   ModuleDeclaration *D = nullptr;
   bool result = P.parseCompilationUnit(D);
-
-    // Verify if the semantic action for the module header is reached
 
   EXPECT_EQ(Diags.numErrors(), Param.ExpectedErrors)
       << "Failure in test case: " << Param.TestName;
@@ -177,8 +201,10 @@ TEST_P(ParserImportTest, ValidateImportBranches) {
 
 INSTANTIATE_TEST_SUITE_P(
     ImportTests, ParserImportTest,
-    // bool ExpectSemaCall2 is not used. -> all false
-    // the last one (Expected value can be returned from skipUntil())
+    // For these cases ExpectSemaCall2 is unused (the second actOnModule
+    // overload is not reached from parseImport); the row's last field
+    // (Expected) is the parseImport return value, which can be `true` when
+    // skipUntil() consumed past EOF.
     Values(
         // 1. Success: Basic Import
         TestParam{"BasicImport", "IMPORT x;", 0, true, false, false},

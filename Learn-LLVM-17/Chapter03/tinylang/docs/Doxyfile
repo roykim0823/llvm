@@ -1,0 +1,98 @@
+# Doxyfile for tinylang Chapter 3.
+#
+# Run from the Chapter03/tinylang directory:
+#   doxygen docs/Doxyfile
+# Output lands in docs/html and docs/latex (the latter only if you also
+# install a TeX distribution).
+#
+# This file overrides a small set of defaults; everything else uses
+# Doxygen's built-in values. Regenerate a full default file with
+# `doxygen -g Doxyfile.new` and diff against this one.
+
+# --- Project metadata --------------------------------------------------------
+PROJECT_NAME           = "tinylang (Chapter 3)"
+PROJECT_NUMBER         = 0.1
+PROJECT_BRIEF          = "A small Modula-2 frontend built on LLVM support libraries"
+
+# Where to write the documentation. Paths are relative to the directory
+# `doxygen` is invoked from (Chapter03/tinylang).
+OUTPUT_DIRECTORY       = docs
+
+# --- Inputs ------------------------------------------------------------------
+# `test` is included so the file-level `/// \file` blocks at the top of each
+# unit test show up under the "Files" tab. We do *not* want the test helper
+# types (MockSema, LexerParam, ScopeAction, …) cluttering the class index,
+# so the EXCLUDE_SYMBOLS list below filters them out.
+INPUT                  = README.md \
+                         include \
+                         lib \
+                         tools \
+                         test
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.hpp *.cpp *.def *.md
+EXCLUDE                = build _deps
+# Don't surface gtest/gmock-internal test machinery as part of tinylang's API.
+EXCLUDE_SYMBOLS        = LexerTokenTest LexerParam \
+                         ParserTester ParserTestee ParserCompilationUnitTest \
+                         ParserImportTest MockSema TestParam \
+                         ScopeTest ScopeTestParam ScopeAction ActionKind \
+                         SemaTestBase SemaBinaryOpTest BinaryOpTestParam \
+                         SemaConditionTest ConditionTestParam \
+                         SemaDeclarationTest DeclTestParam \
+                         SemaSimpleExprTest SimpleExprTestParam \
+                         DiagnosticEngineTest DiagTestData \
+                         TokenKindsTest TokenTestData
+USE_MDFILE_AS_MAINPAGE = README.md
+
+# --- What Doxygen should pick up --------------------------------------------
+EXTRACT_ALL            = YES   # Document items even without a Doxygen comment.
+EXTRACT_PRIVATE        = YES   # Include private/protected members.
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+HIDE_UNDOC_MEMBERS     = NO
+JAVADOC_AUTOBRIEF      = YES   # First sentence of /// or /** */ becomes \brief.
+QT_AUTOBRIEF           = YES
+MULTILINE_CPP_IS_BRIEF = NO
+INLINE_SIMPLE_STRUCTS  = YES
+
+# C++17 features (structured bindings, fold expressions in is/isOneOf, etc.)
+# Helps the parser understand the codebase.
+BUILTIN_STL_SUPPORT    = YES
+
+# Don't warn about every undocumented symbol — the codebase is small enough
+# that EXTRACT_ALL is a more useful default.
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
+
+# --- Output formats ----------------------------------------------------------
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_DYNAMIC_SECTIONS  = YES
+GENERATE_TREEVIEW      = YES   # Sidebar nav like the LLVM Doxygen.
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+
+GENERATE_LATEX         = NO    # Flip to YES if you have pdflatex installed.
+GENERATE_MAN           = NO
+GENERATE_XML           = NO
+
+# --- Graphs (require graphviz / `dot`) ---------------------------------------
+HAVE_DOT               = YES   # Will degrade gracefully if `dot` is missing.
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = NO    # Tends to be noisy for templated LLVM types.
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = NO
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+
+# --- Macros / preprocessing --------------------------------------------------
+# Tell Doxygen how to expand the X-macros in Diagnostic.def / TokenKinds.def,
+# so the generated `diag::*` and `tok::*` enumerators appear in the docs.
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = NO
+PREDEFINED             = LLVM_READNONE= \
+                         __attribute__(x)=

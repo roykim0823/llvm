@@ -1,3 +1,12 @@
+/// \file
+/// \brief Unit tests for tinylang::Scope (the name → Decl symbol table).
+///
+/// Each test case is a small scripted sequence of insert/lookup actions
+/// applied across a chain of nested scopes. The fixture lazily creates
+/// scopes (level 0 = root) and reuses one mock `Decl` per `DeclID`, so a
+/// lookup can be asserted to return the exact same pointer that was
+/// previously inserted.
+
 #include "tinylang/Sema/Scope.h"
 #include "tinylang/AST/AST.h"
 #include "llvm/ADT/StringRef.h"

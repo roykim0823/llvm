@@ -1,3 +1,10 @@
+/// \file
+/// \brief Implementation of \ref tinylang::Sema.
+///
+/// Every `actOn…` here corresponds to a grammar rule in
+/// \ref tinylang::Parser. Most produce an AST node and, where applicable,
+/// add it to the current \ref tinylang::Scope.
+
 #include "tinylang/Sema/Sema.h"
 #include "llvm/Support/raw_ostream.h"
 

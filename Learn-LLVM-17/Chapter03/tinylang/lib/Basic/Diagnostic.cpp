@@ -1,3 +1,10 @@
+/// \file
+/// \brief Implementation of \ref tinylang::DiagnosticsEngine helpers.
+///
+/// The two tables (text and severity) are built by including
+/// `Diagnostic.def` twice with different `DIAG` macros, then indexed by the
+/// `diag::*` ID at runtime.
+
 #include "tinylang/Basic/Diagnostic.h"
 
 using namespace tinylang;

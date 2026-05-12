@@ -1,3 +1,15 @@
+/// \file
+/// \brief Unit tests for the `tinylang::tok::get*` spelling helpers.
+///
+/// Each token kind in `TokenKinds.def` is expanded into one fixture row
+/// (kind, stringified name, spelling, is-punctuator flag, is-keyword flag).
+/// Three `TEST_P` checks per row verify:
+///  - `getTokenName`  returns the stringified enumerator,
+///  - `getPunctuatorSpelling` returns the spelling for punctuators and
+///    `nullptr` otherwise,
+///  - `getKeywordSpelling`    returns the spelling for keywords and
+///    `nullptr` otherwise.
+
 #include "tinylang/Basic/TokenKinds.h"
 #include "llvm/ADT/StringRef.h"
 #include "gtest/gtest.h"

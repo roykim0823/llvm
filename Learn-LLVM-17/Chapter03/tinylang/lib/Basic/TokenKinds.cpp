@@ -1,3 +1,11 @@
+/// \file
+/// \brief Implementations of \ref tinylang::tok::getTokenName,
+/// \ref tinylang::tok::getPunctuatorSpelling, and
+/// \ref tinylang::tok::getKeywordSpelling.
+///
+/// Each function is driven by `TokenKinds.def` re-included with macros that
+/// produce a name table or a `switch` body.
+
 #include "tinylang/Basic/TokenKinds.h"
 #include "llvm/Support/ErrorHandling.h"
 

@@ -1,3 +1,6 @@
+/// \file
+/// \brief Implementation of the \ref tinylang::Scope symbol table.
+
 #include "tinylang/Sema/Scope.h"
 #include "tinylang/AST/AST.h"
 
