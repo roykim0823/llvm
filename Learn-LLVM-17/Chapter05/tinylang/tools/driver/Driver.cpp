@@ -30,6 +30,11 @@ static llvm::cl::list<std::string>
                llvm::cl::desc("<input-files>"));
 
 static llvm::cl::opt<std::string>
+    OutputFilename("o",
+                   llvm::cl::desc("Output filename"),
+                   llvm::cl::value_desc("filename"));
+
+static llvm::cl::opt<std::string>
     MTriple("mtriple",
             llvm::cl::desc("Override target triple for module"));
 
@@ -76,7 +81,11 @@ createTargetMachine(const char *Argv0) {
   }
 
   llvm::TargetMachine *TM = Target->createTargetMachine(
+#if __clang_major__ <= 20
+      Triple.getTriple(), CPUStr, FeatureStr, TargetOptions,
+#else
       Triple, CPUStr, FeatureStr, TargetOptions,  // Triple.getTriple() -> Triple in llvm21
+#endif
       std::optional<llvm::Reloc::Model>(codegen::getRelocModel()));
   return TM;
 }
@@ -85,10 +94,10 @@ bool emit(StringRef Argv0, llvm::Module *M,
           llvm::TargetMachine *TM,
           StringRef InputFilename) {
   CodeGenFileType FileType = codegen::getFileType();
-  std::string OutputFilename;
-  if (InputFilename == "-") {
-    OutputFilename = "-";
-  } else {
+  if (OutputFilename.empty()) {
+    if (InputFilename == "-") {
+      OutputFilename = "-";
+    } else {
 #if __clang_major__ <= 17
       if (InputFilename.endswith(".mod"))
 #else
@@ -120,6 +129,7 @@ bool emit(StringRef Argv0, llvm::Module *M,
 #endif
         OutputFilename.append(".null");
         break;
+      }
     }
   }
 

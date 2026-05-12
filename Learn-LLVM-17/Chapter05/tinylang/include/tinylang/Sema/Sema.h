@@ -37,16 +37,18 @@ public:
         Diags(Diags) {
     initialize();
   }
+  virtual ~Sema() = default;  // for gmock-based testing
 
   void initialize();
 
-  ModuleDeclaration *actOnModuleDeclaration(SMLoc Loc,
-                                            StringRef Name);
-  void actOnModuleDeclaration(ModuleDeclaration *ModDecl,
-                              SMLoc Loc, StringRef Name,
-                              DeclList &Decls,
-                              StmtList &Stmts);
-  void actOnImport(StringRef ModuleName, IdentList &Ids);
+  // Virtual for gmock-based parser testing (see test/Parser_test.cpp).
+  virtual ModuleDeclaration *actOnModuleDeclaration(SMLoc Loc,
+                                                    StringRef Name);
+  virtual void actOnModuleDeclaration(ModuleDeclaration *ModDecl,
+                                      SMLoc Loc, StringRef Name,
+                                      DeclList &Decls,
+                                      StmtList &Stmts);
+  virtual void actOnImport(StringRef ModuleName, IdentList &Ids);
   void actOnConstantDeclaration(DeclList &Decls, SMLoc Loc,
                                 StringRef Name, Expr *E);
   void actOnAliasTypeDeclaration(DeclList &Decls, SMLoc Loc,

@@ -44,10 +44,11 @@ llvm::Type *CGModule::convertType(TypeDeclaration *Ty) {
     // expression is a constant expression of type
     // INTEGER. To simplify the coding, we expect an
     // IntegerLiteral here.
-    // TODO Evaluate the constant expression.
+
     Expr *Nums = ArrayTy->getNums();
     assert(llvm::cast<IntegerLiteral>(Nums) &&
            "Expected an integer literal");
+
     uint64_t NumElements =
         llvm::cast<IntegerLiteral>(Nums)
             ->getValue()
