@@ -10,18 +10,13 @@ parsed-and-checked AST is lowered to LLVM IR, then handed to the LLVM
 codegen pipeline to produce assembly or an object file.
 
 ```
-                                            +-------------+
-        Ch3 pipeline (Lexer/Parser/Sema)    | CodeGen     |  Ch4 additions
-                          |                 |             |
-                          v                 |  Code-      |
-                +-------------------+       |  Generator  |       LLVM
-                | ModuleDeclaration | --->  |   |         | --->  pass    --> .s / .o / .ll
-                |   (typed AST)     |       |   v         |       manager
-                +-------------------+       |  CGModule   |
-                                            |   |         |
-                                            |   v         |
-                                            |  CGProcedure|
-                                            +-------------+
+   Ch3 frontend                        Ch4 additions (this chapter)
+ ─────────────────────             ──────────────────────────────────────
+ .mod ─► Lexer ─► Parser ─► Sema ─► CodeGenerator ─► CGModule ─► CGProcedure ─► llvm::Module ─► back end
+                                                                                                  │
+                                                                                                  ├─► .s
+                                                                                                  ├─► .o
+                                                                                                  └─► .ll
 ```
 
 ## Summary of changes
@@ -56,6 +51,24 @@ The code generator is split into three classes mirroring the frontend's
 
 ### SSA construction at a glance
 
+SSA = Static Single Assignment: every value is "written" exactly once.
+Source code like `x := x + 1` becomes a *new* SSA value each time. When
+control flow merges (after an `IF`, at a `WHILE` header), the two
+candidate values for `x` are merged via a **phi** instruction. The trick
+used here is that we never first emit allocas + loads/stores and let
+`mem2reg` clean it up — instead we build the phis *while we are emitting*
+the IR, using a per-block map of "what value does each tinylang variable
+currently hold?".
+
+Vocabulary used in the code:
+
+- **`CurrentDef[BB].Defs`** — the per-block map: tinylang `Decl` → its
+  current SSA value in basic block `BB`.
+- **sealed block** — a block whose every predecessor edge has already
+  been emitted. Sealing makes it safe to wire up phi operands.
+- **incomplete phi** — a phi created in a block that is not sealed yet;
+  its operands are filled in later by `sealBlock`.
+
 ```
 readVariable(BB, D)
    ├─ local  ─► readLocalVariable(BB, D)
@@ -71,6 +84,33 @@ readVariable(BB, D)
 
 `sealBlock(BB)` is called once every predecessor of `BB` has been emitted —
 at that point any `IncompletePhi` is filled in by `addPhiOperands`.
+
+### Worked example — WHILE
+
+`WHILE Cond DO Body END` shows why the seal/unseal dance matters:
+
+```
+         Curr                   (block before the loop)
+           │
+           ▼
+      ┌────────┐    false
+      │ Cond   │──────────────────┐
+      └────────┘                  │
+           │ true                 │
+           ▼                      ▼
+      ┌────────┐            ┌───────────┐
+      │ Body   │            │ AfterLoop │
+      └────────┘            └───────────┘
+           │  back edge to Cond
+           └──>──>──>
+```
+
+`WhileCondBB` has **two** predecessors: `Curr` (the entry edge) and the
+back-edge from `WhileBodyBB`. We cannot seal it until both edges are
+emitted, which is why `sealBlock(WhileCondBB)` is called *after* the body
+has been lowered. Any variable read inside the body that comes from
+"either before the loop or the previous iteration" therefore goes through
+the unsealed → IncompletePhi → fixed-in-sealBlock path.
 
 ## Driver — what's new
 
@@ -144,6 +184,20 @@ Useful flags for `./build/tools/driver/tinylang`:
   --emit-llvm          with --filetype=asm, write textual LLVM IR (.ll)
   --version            tinylang version + default target + registered targets
 ```
+
+## Where to read next
+
+Once the Doxygen output has been generated, these are the entry points
+worth following in order:
+
+- `tinylang::CodeGenerator` — the façade entry point used by the driver.
+- `tinylang::CGModule` — module-level state, type cache, name mangling.
+- `tinylang::CGProcedure` — per-procedure lowering and SSA construction.
+- `tinylang::CGProcedure::readLocalVariableRecursive` — the heart of the
+  SSA algorithm.
+- `tinylang::CGProcedure::optimizePhi` — trivial-phi elimination.
+- `tinylang::AssignmentStatement` — read the `\note` about Ch04's
+  `Decl *` widening.
 
 ## Doxygen
 

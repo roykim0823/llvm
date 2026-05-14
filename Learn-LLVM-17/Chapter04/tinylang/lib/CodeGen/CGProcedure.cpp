@@ -7,6 +7,24 @@
 /// al.'s algorithm: definitions are tracked per basic block, phi nodes are
 /// inserted lazily on first use, and \ref CGProcedure::optimizePhi removes
 /// trivial phis along the way.
+///
+/// \section newbie Newbie cheat-sheet
+/// SSA = Static Single Assignment: every value is "written" exactly once.
+/// Source code like `x := x + 1` becomes a *new* SSA value each time. When
+/// control flow merges (after an `IF`, at a `WHILE` header), the two
+/// candidate values for `x` are merged via a **phi** instruction. The trick
+/// used here is that we never first emit allocas + loads/stores and let
+/// `mem2reg` clean it up — instead we build the phis *while we are emitting*
+/// the IR, using a per-block map of "what value does each tinylang variable
+/// currently hold?".
+///
+/// Vocabulary used below:
+///   - **CurrentDef[BB].Defs** — the per-block map: tinylang Decl → its
+///     current SSA value in basic block BB.
+///   - **sealed block** — a block whose every predecessor edge has already
+///     been emitted. Sealing makes it safe to wire up phi operands.
+///   - **incomplete phi** — a phi created in a block that is not sealed yet;
+///     its operands are filled in later by \ref sealBlock.
 
 #include "tinylang/CodeGen/CGProcedure.h"
 #include "llvm/IR/CFG.h"
@@ -45,16 +63,27 @@ CGProcedure::readLocalVariable(llvm::BasicBlock *BB,
 llvm::Value *CGProcedure::readLocalVariableRecursive(
     llvm::BasicBlock *BB, Decl *Decl) {
   llvm::Value *Val = nullptr;
+  // Three cases — each maps to one branch below:
+  //   (1) BB is unsealed: we do not yet know every predecessor, so we cannot
+  //       fill in the phi operands. Drop a placeholder phi and remember it
+  //       in IncompletePhis; sealBlock() will fix it up later.
+  //   (2) BB has exactly one predecessor: there is nothing to merge — just
+  //       fetch the value from that predecessor recursively.
+  //   (3) BB has several predecessors and is sealed: create a phi and
+  //       immediately fill in its operands from each predecessor.
   if (!CurrentDef[BB].Sealed) {
-    // Add incomplete phi for variable.
+    // Case (1): incomplete phi — operands will be added in sealBlock().
     llvm::PHINode *Phi = addEmptyPhi(BB, Decl);
     CurrentDef[BB].IncompletePhis[Phi] = Decl;
     Val = Phi;
   } else if (auto *PredBB = BB->getSinglePredecessor()) {
-    // Only one predecessor.
+    // Case (2): single predecessor — recurse.
     Val = readLocalVariable(PredBB, Decl);
   } else {
-    // Create empty phi instruction to break potential cycles.
+    // Case (3): multiple predecessors. We insert the phi *before* recursing
+    // so that a back-edge that comes back to BB (e.g. a WHILE loop) sees
+    // the phi as the current definition and terminates the recursion —
+    // otherwise the lookup would loop forever.
     llvm::PHINode *Phi = addEmptyPhi(BB, Decl);
     writeLocalVariable(BB, Decl, Phi);
     Val = addPhiOperands(BB, Decl, Phi);
@@ -84,22 +113,30 @@ llvm::Value *CGProcedure::addPhiOperands(
   return optimizePhi(Phi);
 }
 
-// the phi instruction is often not interpreted by the algorithms
-// and thus hinders the optimization in general.
-// the fewer phi inst we generate, the better
+// A phi is "trivial" when all its incoming values are the same (ignoring
+// self-references). Trivial phis bring no information but block downstream
+// LLVM optimizations, so we remove them as we go.
+//
+// Why bother? Plenty of passes look at how a value is *defined*. A phi hides
+// that definition behind a CFG-dependent merge, so the fewer phis the better.
 llvm::Value *CGProcedure::optimizePhi(llvm::PHINode *Phi) {
   llvm::Value *Same = nullptr;
+  // Walk all incoming values. Skip self-references (a phi that uses itself
+  // is still "trivial" if every other operand agrees). The moment we see
+  // two different non-self values, the phi is not trivial and we keep it.
   for (llvm::Value *V : Phi->incoming_values()) {
     if (V == Same || V == Phi)
       continue;
-    if (Same && V != Same)  // two difference values
+    if (Same && V != Same)  // two distinct incoming values: keep the phi
       return Phi;
     Same = V;
   }
-  if (Same == nullptr) // no operands
+  if (Same == nullptr) // no operands (unreachable block) — fall back to undef
     Same = llvm::UndefValue::get(Phi->getType());
 
-  // Collect phi instructions using this value and try to optimize them, too.
+  // Removing this phi might make *other* phis trivial too (e.g. a phi whose
+  // only non-self operand was this one). Collect them before we erase so we
+  // can revisit them.
   llvm::SmallVector<llvm::PHINode *, 8> CandidatePhis;
   for (llvm::Use &U : Phi->uses()) {
     if (auto *P =
@@ -124,6 +161,13 @@ void CGProcedure::sealBlock(llvm::BasicBlock *BB) {
   CurrentDef[BB].Sealed = true;
 }
 
+// Dispatch table for writes to a tinylang variable/parameter.
+//   * local variable        -> update CurrentDef map (pure SSA, no memory)
+//   * module-level global   -> emit a `store` to the global
+//   * VAR formal parameter  -> emit a `store` through the pointer argument
+//   * value formal parameter-> update CurrentDef map (treated like a local)
+// New in Ch04 — this is what the AST.h widening of `AssignmentStatement::Var`
+// from `VariableDeclaration*` to `Decl*` enables.
 void CGProcedure::writeVariable(llvm::BasicBlock *BB,
                                 Decl *D, llvm::Value *Val) {
   if (auto *V = llvm::dyn_cast<VariableDeclaration>(D)) {
@@ -139,6 +183,7 @@ void CGProcedure::writeVariable(llvm::BasicBlock *BB,
                  llvm::dyn_cast<FormalParameterDeclaration>(
                      D)) {
     if (FP->isVar()) {
+      // VAR parameter — lowered as a pointer, so writes become stores.
       Builder.CreateStore(Val, FormalParams[FP]);
     } else
       writeLocalVariable(BB, D, Val);
@@ -375,11 +420,31 @@ void CGProcedure::emitStmt(IfStatement *Stmt) {
   setCurr(AfterIfBB);
 }
 
+// `WHILE Cond DO Body END` lowers to the classic three-block diamond:
+//
+//        Curr                      (block before the loop)
+//          |
+//          v
+//     +--------+        false
+//     | Cond   |--------------------+
+//     +--------+                    |
+//        | true                     |
+//        v                          v
+//     +--------+              +-----------+
+//     | Body   |              | AfterLoop |
+//     +--------+              +-----------+
+//        |  back edge to Cond
+//        +-->-->-->
+//
+// Note the sealing order: WhileCondBB has *two* predecessors (Curr and the
+// back-edge from WhileBodyBB) so we cannot seal it until *after* the body's
+// terminator has been emitted. That is why the body block is created before
+// we wire up Cond — the back edge is what unlocks Cond's sealing.
 void CGProcedure::emitStmt(WhileStatement *Stmt) {
   // The basic block for the condition.
   llvm::BasicBlock *WhileCondBB = llvm::BasicBlock::Create(
-      CGM.getLLVMCtx(), "while.cond", Fn);  // CGM.getLLVMCte() return the LLVM context
-                                            // Fn is the current function
+      CGM.getLLVMCtx(), "while.cond", Fn);  // CGM.getLLVMCtx() returns the LLVM context.
+                                            // Fn is the current function.
   // The basic block for the while body.
   llvm::BasicBlock *WhileBodyBB = llvm::BasicBlock::Create(
       CGM.getLLVMCtx(), "while.body", Fn);
@@ -397,10 +462,10 @@ void CGProcedure::emitStmt(WhileStatement *Stmt) {
   setCurr(WhileBodyBB);  // Generate the loop body
   emit(Stmt->getWhileStmts());
   Builder.CreateBr(WhileCondBB);  // add a branch back to the basic block of the condition
-  sealBlock(WhileCondBB);
+  sealBlock(WhileCondBB); // both predecessors of Cond are now emitted -> safe to seal
   sealBlock(Curr);
 
-  setCurr(AfterWhileBB);  // The emtpy basic block for stateemnt following WHILE becomes the new current basic block
+  setCurr(AfterWhileBB);  // The empty basic block following WHILE becomes the new current basic block
 }
 
 void CGProcedure::emitStmt(ReturnStatement *Stmt) {
@@ -431,6 +496,15 @@ void CGProcedure::emit(const StmtList &Stmts) {
   }
 }
 
+// Top-level driver for procedure lowering. The high-level recipe:
+//   1. Build the llvm::Function and an "entry" basic block.
+//   2. Seed CurrentDef[entry] with each parameter's incoming Argument so
+//      that subsequent reads of the parameter return the SSA value.
+//   3. For aggregate locals (arrays/records in later chapters), reserve
+//      stack space via an alloca. Scalar locals live purely in SSA.
+//   4. Emit the body statement-by-statement.
+//   5. Tie off control flow: add an implicit `ret void` if the user forgot,
+//      and seal the final block.
 void CGProcedure::run(ProcedureDeclaration *Proc) {
   this->Proc = Proc;
   Fty = createFunctionType(Proc);
@@ -445,7 +519,8 @@ void CGProcedure::run(ProcedureDeclaration *Proc) {
     FormalParameterDeclaration *FP =
         Proc->getFormalParams()[Pair.index()];
     // Create mapping FormalParameter -> llvm::Argument for
-    // VAR parameters.
+    // VAR parameters (used by writeVariable/readVariable to emit
+    // load/store through the pointer argument).
     FormalParams[FP] = Arg;
     writeLocalVariable(Curr, FP, Arg);
   }
@@ -455,6 +530,9 @@ void CGProcedure::run(ProcedureDeclaration *Proc) {
             llvm::dyn_cast<VariableDeclaration>(D)) {
       llvm::Type *Ty = mapType(Var);
       if (Ty->isAggregateType()) {
+        // Aggregate locals cannot live in SSA registers — they need a stack
+        // slot. (Tinylang in Ch04 has no aggregates yet, but this is the
+        // hook for arrays/records added in later chapters.)
         llvm::Value *Val = Builder.CreateAlloca(Ty);
         writeLocalVariable(Curr, Var, Val);
       }
@@ -464,7 +542,7 @@ void CGProcedure::run(ProcedureDeclaration *Proc) {
   auto Block = Proc->getStmts();
   emit(Proc->getStmts());
   if (!Curr->getTerminator()) {
-    Builder.CreateRetVoid();  // to handle an implicit return
+    Builder.CreateRetVoid();  // implicit return for a proper procedure
   }
   sealBlock(Curr);
 }
