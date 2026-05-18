@@ -4,7 +4,7 @@ from np_memref import MemRefDescriptor, numpy_to_memref
 
 def main():
   # Load the shared library
-  lib = ctypes.CDLL("./libarray_add.dylib")
+  lib = ctypes.CDLL("./build/libarray_add.dylib")
 
   # Get the C interface function
   array_add = lib._mlir_ciface_array_add
