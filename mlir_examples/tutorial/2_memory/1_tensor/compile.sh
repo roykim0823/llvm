@@ -41,14 +41,3 @@ llc -filetype=obj --relocation-model=pic ./build/tensor_ori_opt.ll -o ./build/te
 clang -shared -fPIC ./build/tensor_ori_opt.o -o ./build/tensor_ori.so
 
 python aot_main_ori.py
-
-
-
-
-
-
-
-
-
-
-python aot_main_ori.py

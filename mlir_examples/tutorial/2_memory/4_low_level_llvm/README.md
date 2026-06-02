@@ -1,4 +1,4 @@
-# 3 — Low-Level LLVM Structures in MLIR
+# 4 — Low-Level LLVM Structures in MLIR
 
 This tutorial drops below the comfortable `memref` / `tensor` abstractions
 and looks at the constructs MLIR exposes when you want C-level control:
