@@ -9,11 +9,14 @@ class InstDesc<string name, string suffix, int delta> {
   int Delta = delta;
 }
 
+// Define records for each operand type, with the appropriate suffix and opcode delta.
 def RegOp   : InstDesc<"", "", 0>;
 def ImmOp   : InstDesc<"I", "i", 1>;
 def MemOp   : InstDesc<"M", "m", 2>;
 
 class getDesc<int n> {
+  // Use a conditional to select the appropriate InstDesc based on the value of n.
+  // it works like a switch statement, but it is more concise and easier to read.
   InstDesc ret = !cond(!eq(n, 0) : RegOp,
                        !eq(n, 1) : ImmOp,
                        !eq(n, 2) : MemOp);
@@ -29,6 +32,7 @@ multiclass InstWithOps<string mnemonic, int opcode> {
 }
 
 multiclass InstWithOpsv<string mnemonic, int opcode> {
+  // loop over a list of elements
   foreach I = [RegOp, ImmOp, MemOp] in {
     defvar Name = I.Name;
     defvar Suffix = I.Suffix;

@@ -29,3 +29,5 @@ build/
 .vs
 # clangd index
 .clangd
+# Claude Code local config (matches .claude anywhere in the tree)
+.claude

@@ -4,26 +4,26 @@
 #include "llvm/TableGen/TableGenBackend.h"
 #include <algorithm>
 
-using namespace llvm;
+// using namespace llvm;
 
 namespace {
 class TokenAndKeywordFilterEmitter {
-  RecordKeeper &Records;
+  llvm::RecordKeeper &Records;
 
 public:
-  explicit TokenAndKeywordFilterEmitter(RecordKeeper &R)
+  explicit TokenAndKeywordFilterEmitter(llvm::RecordKeeper &R)
       : Records(R) {}
 
-  void run(raw_ostream &OS);
+  void run(llvm::raw_ostream &OS);
 
 private:
-  void emitFlagsFragment(raw_ostream &OS);
-  void emitTokenKind(raw_ostream &OS);
-  void emitKeywordFilter(raw_ostream &OS);
+  void emitFlagsFragment(llvm::raw_ostream &OS);
+  void emitTokenKind(llvm::raw_ostream &OS);
+  void emitKeywordFilter(llvm::raw_ostream &OS);
 };
 } // End anonymous namespace
 
-void TokenAndKeywordFilterEmitter::run(raw_ostream &OS) {
+void TokenAndKeywordFilterEmitter::run(llvm::raw_ostream &OS) {
   // Emit Flag fragments.
   // Records.startTimer("Emit flags");  // Not in llvm21
   //TGIimer Timer();
@@ -44,27 +44,28 @@ void TokenAndKeywordFilterEmitter::run(raw_ostream &OS) {
 }
 
 void TokenAndKeywordFilterEmitter::emitFlagsFragment(
-    raw_ostream &OS) {
+    llvm::raw_ostream &OS) {
   OS << "#ifdef GET_TOKEN_FLAGS\n";
   OS << "#undef GET_TOKEN_FLAGS\n";
-  for (const Record *CC :  // const Record* in llvm21
+  for (const llvm::Record *CC :  // const llvm::Record* in llvm21
        Records.getAllDerivedDefinitions("Flag")) {
-    StringRef Name = CC->getValueAsString("Name");
+    llvm::StringRef Name = CC->getValueAsString("Name");
     int64_t Val = CC->getValueAsInt("Val");
-    OS << Name << " = " << format_hex(Val, 2) << ",\n";
+    OS << Name << " = " << llvm::format_hex(Val, 2) << ",\n";
   }
-  OS << "#endif\n";
+  OS << "#endif\n\n";
 }
 
 void TokenAndKeywordFilterEmitter::emitTokenKind(
-    raw_ostream &OS) {
+    llvm::raw_ostream &OS) {
   OS << "#ifdef GET_TOKEN_KIND_DECLARATION\n"
      << "#undef GET_TOKEN_KIND_DECLARATION\n"
      << "namespace tok {\n"
      << "  enum TokenKind : unsigned short {\n";
-  for (const Record *CC :
+
+  for (const llvm::Record *CC :
        Records.getAllDerivedDefinitions("Token")) {
-    StringRef Name = CC->getValueAsString("Name");
+    llvm::StringRef Name = CC->getValueAsString("Name");
     OS << "    ";
     if (CC->isSubClassOf("Keyword"))
       OS << "kw_";
@@ -72,6 +73,8 @@ void TokenAndKeywordFilterEmitter::emitTokenKind(
   }
   OS << "    NUM_TOKENS\n"
      << "  };\n";
+
+
   OS << "  const char *getTokenName(TokenKind Kind) "
         "LLVM_READNONE;\n"
      << "  const char *getPunctuatorSpelling(TokenKind "
@@ -80,16 +83,18 @@ void TokenAndKeywordFilterEmitter::emitTokenKind(
         "Kind) "
         "LLVM_READNONE;\n"
      << "}\n"
-     << "#endif\n";
+     << "#endif\n\n";
+
   OS << "#ifdef GET_TOKEN_KIND_DEFINITION\n";
   OS << "#undef GET_TOKEN_KIND_DEFINITION\n";
   OS << "static const char * const TokNames[] = {\n";
-  for (const Record *CC :
+  for (const llvm::Record *CC :
        Records.getAllDerivedDefinitions("Token")) {
     OS << "  \"" << CC->getValueAsString("Name")
        << "\",\n";
   }
   OS << "};\n\n";
+
   OS << "const char *tok::getTokenName(TokenKind Kind) "
         "{\n"
      << "  if (Kind <= tok::NUM_TOKENS)\n"
@@ -97,11 +102,12 @@ void TokenAndKeywordFilterEmitter::emitTokenKind(
      << "  llvm_unreachable(\"unknown TokenKind\");\n"
      << "  return nullptr;\n"
      << "};\n\n";
+
   OS << "const char "
         "*tok::getPunctuatorSpelling(TokenKind "
         "Kind) {\n"
      << "  switch (Kind) {\n";
-  for (const Record *CC :
+  for (const llvm::Record *CC :
        Records.getAllDerivedDefinitions("Punctuator")) {
     OS << "    " << CC->getValueAsString("Name")
        << ": return \""
@@ -111,10 +117,11 @@ void TokenAndKeywordFilterEmitter::emitTokenKind(
      << "  }\n"
      << "  return nullptr;\n"
      << "};\n\n";
+
   OS << "const char *tok::getKeywordSpelling(TokenKind "
         "Kind) {\n"
      << "  switch (Kind) {\n";
-  for (const Record *CC :
+  for (const llvm::Record *CC :
        Records.getAllDerivedDefinitions("Keyword")) {
     OS << "    kw_" << CC->getValueAsString("Name")
        << ": return \"" << CC->getValueAsString("Name")
@@ -124,20 +131,20 @@ void TokenAndKeywordFilterEmitter::emitTokenKind(
      << "  }\n"
      << "  return nullptr;\n"
      << "};\n\n";
-  OS << "#endif\n";
+  OS << "#endif\n\n";
 }
 
 void TokenAndKeywordFilterEmitter::emitKeywordFilter(
-    raw_ostream &OS) {
+    llvm::raw_ostream &OS) {
   // Simplification: assume only one TokenFilter is
   // defined
-  std::vector<const Record *> AllTokenFilter =  // const Record* in llvm21
+  std::vector<const llvm::Record *> AllTokenFilter =  // const llvm::Record* in llvm21
       Records.getAllDerivedDefinitionsIfDefined(
           "TokenFilter");
   if (AllTokenFilter.empty())
     return;
 
-  const ListInit *TokenFilter = dyn_cast_or_null<ListInit>(  // const ListInit* in llvm21
+  const llvm::ListInit *TokenFilter = llvm::dyn_cast_or_null<llvm::ListInit>(  // const llvm::ListInit* in llvm21
       AllTokenFilter[0]
           ->getValue("Tokens")  // Tikons's type if list<Token>
           ->getValue());
@@ -145,16 +152,16 @@ void TokenAndKeywordFilterEmitter::emitKeywordFilter(
     return;
 
   // Collect the keyword/flag values.
-  using KeyFlag = std::pair<StringRef, uint64_t>;
+  using KeyFlag = std::pair<llvm::StringRef, uint64_t>;
   std::vector<KeyFlag> Table;
   for (size_t I = 0, E = TokenFilter->size(); I < E;
        ++I) {
-   const Record *CC = TokenFilter->getElementAsRecord(I);  // const Record* in llvm21
-   StringRef Name = CC->getValueAsString("Name");
+   const llvm::Record *CC = TokenFilter->getElementAsRecord(I);  // const llvm::Record* in llvm21
+   llvm::StringRef Name = CC->getValueAsString("Name");
    uint64_t Val = 0;
-   const ListInit *Flags = nullptr;  // const ListInit* in llvm21
-   if (const RecordVal *F = CC->getValue("Flags"))  // const RecordVal* in llvm21
-      Flags = dyn_cast_or_null<ListInit>(F->getValue());
+   const llvm::ListInit *Flags = nullptr;  // const llvm::ListInit* in llvm21
+   if (const llvm::RecordVal *F = CC->getValue("Flags"))  // const llvm::RecordVal* in llvm21
+      Flags = llvm::dyn_cast_or_null<llvm::ListInit>(F->getValue());
    if (Flags) {
       for (size_t I = 0, E = Flags->size(); I < E; ++I) {
         Val |=
@@ -227,8 +234,8 @@ void TokenAndKeywordFilterEmitter::emitKeywordFilter(
   OS << "#endif\n";
 }
 
-void EmitTokensAndKeywordFilter(RecordKeeper &RK,
-                                raw_ostream &OS) {
+void EmitTokensAndKeywordFilter(llvm::RecordKeeper &RK,
+                                llvm::raw_ostream &OS) {
   emitSourceFileHeader("Token Kind and Keyword Filter "
                        "Implementation Fragment",
                        OS);
