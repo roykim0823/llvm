@@ -69,21 +69,42 @@ process **exit code**. `echo $?` prints the exit code of the last command:
 ```
 
 **Step 5 — call it from Python.** [`simple.py`](1_llvm_modules/simple.py) uses
-`ctypes` to load the shared library and call `main()` directly:
+the standard-library `ctypes` module to load the shared library and call
+`main()` directly:
 
 ```python
 import ctypes
+
+# Load the shared library (the .so we just built) into the process.
 module = ctypes.CDLL("./build/libsimple.so")
-module.main.argtypes = []
-module.main.restype = ctypes.c_int
+
+# Declare the C signature of `main` so ctypes marshals values correctly:
+module.main.argtypes = []            # main takes no arguments
+module.main.restype = ctypes.c_int   # main returns a C int (i32)
+
+# Call the native function and print its return value.
 print(module.main())
 ```
+
+Line by line:
+
+- `ctypes.CDLL(path)` `dlopen`s the shared library and returns a handle whose
+  attributes are its exported symbols (`module.main` is the C `main`).
+- `argtypes` / `restype` tell ctypes how to convert Python values to/from C.
+  Without `restype`, ctypes assumes the function returns a C `int` — correct
+  here, but setting it explicitly is good practice and essential once return
+  types aren't `int`.
+- `module.main()` actually invokes the compiled native code and returns `42` as
+  a Python `int`.
 
 Output:
 
 ```
 42
 ```
+
+> Unlike Step 4, the value `42` here is a **return value** we print, not a
+> process exit code.
 
 This is the punchline of Part A: **anything you compile through LLVM becomes a
 plain shared library you can call from Python** — the bridge into the ML
@@ -101,21 +122,29 @@ write the loop at a high level and *lower* it for us.
 ### The source: [`example.mlir`](2_mlir/example.mlir)
 
 ```mlir
+// loop_add: sum the integers 0..9 using a structured (scf) for-loop.
+// Returns `index` (a platform-sized integer, like size_t).
 func.func @loop_add() -> (index) {
-  %init = index.constant 0
-  %lb   = index.constant 0
-  %ub   = index.constant 10
-  %step = index.constant 1
+  // `index` dialect: loop bounds and the running total are index-typed.
+  %init = index.constant 0   // initial accumulator value
+  %lb = index.constant 0     // loop lower bound (inclusive)
+  %ub = index.constant 10    // loop upper bound (exclusive)
+  %step = index.constant 1   // loop step
 
+  // scf.for is a *structured* loop. `iter_args` threads a loop-carried value
+  // (%acc) through each iteration; whatever we scf.yield becomes %acc next
+  // time, and the final value is bound to %sum.
   %sum = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> (index) {
-    %sum_next = arith.addi %acc, %iv : index
-    scf.yield %sum_next : index
+    %sum_next = arith.addi %acc, %iv : index   // arith dialect: acc + iv
+    scf.yield %sum_next : index                // carry sum_next into next iter
   }
   return %sum : index
 }
 
+// main: call loop_add and return the result as a C-style i32 exit code.
 func.func @main() -> i32 {
   %out = call @loop_add() : () -> index
+  // index is i64 here; narrow it to i32 so main can return a normal exit code.
   %out_i32 = arith.index_cast %out : index to i32
   return %out_i32 : i32
 }
@@ -133,16 +162,9 @@ int loop_add() {
 int main() { return loop_add(); }
 ```
 
-What to notice — this single file touches **four dialects**:
-
-- **`func`** — `func.func` defines functions; `call` invokes one.
-- **`index`** — `index.constant` creates platform-sized integers used for loop
-  bounds and induction variables.
-- **`scf`** — *structured control flow*. `scf.for ... iter_args(...)` is a loop
-  that **carries a value** (`%acc`) across iterations and `scf.yield`s the
-  updated value each time. This is the high-level construct we get for free.
-- **`arith`** — `arith.addi` adds integers; `arith.index_cast` converts the
-  `index` result to `i32` so `main` can return it as a normal exit code.
+The single file touches **four dialects** — `func` (functions & `call`), `index`
+(loop bounds / induction var), `scf` (the structured `scf.for` loop), and `arith`
+(`addi`, `index_cast`). See the comments above for what each line does.
 
 > **Result preview:** the loop sums `0..9`, so the program returns **45**, not
 > 42. (Different from Part A on purpose.)
@@ -203,26 +225,7 @@ module {
 The loop's carried value (`iter_args`) became the **block arguments** of `^bb1`
 (`%4` = induction var, `%5` = accumulator) — MLIR's alternative to phi nodes.
 
-#### Step 2 — `mlir-runner`: JIT-execute directly
-
-```bash
-mlir-runner -e main -entry-point-result=i32 ./build/example_opt.mlir
-```
-
-`mlir-runner` JIT-compiles and runs the module without producing any files —
-ideal for quick iteration. `-e main` names the entry function and
-`-entry-point-result=i32` tells it the return type. Output:
-
-```
-45
-```
-
-(The script also shows the variant with
-`-shared-libs=/opt/homebrew/opt/llvm@20/lib/libmlir_runner_utils.dylib`, needed
-only when your MLIR calls runtime helpers like `printMemref` — not required
-here.)
-
-#### Step 3 — `mlir-translate`: `llvm` dialect → LLVM IR
+#### Step 2 — `mlir-translate`: `llvm` dialect → LLVM IR
 
 ```bash
 mlir-translate ./build/example_opt.mlir -mlir-to-llvmir -o ./build/example.ll
@@ -255,18 +258,31 @@ define i32 @main() {
 }
 ```
 
-#### Step 4 — `llc` + `clang`: LLVM IR → object → shared library
+#### Step 3 — `llc` + `clang`: LLVM IR → object → shared library + executable
 
 ```bash
 llc -filetype=obj --relocation-model=pic ./build/example.ll -o ./build/example.o
-clang -shared -fPIC ./build/example.o -o ./build/libexample.so
+clang -shared -fPIC ./build/example.o -o ./build/libexample.so   # shared library
+clang ./build/example.o -o ./build/example                       # executable
+./build/example; echo $?
 ```
 
-Same final stage as Part A: a native object, then a shared library. From here
-you could call `loop_add`/`main` from Python with `ctypes`, exactly as in
-`simple.py`.
+Exactly the same final stages as Part A. `llc` produces the native object, then
+`clang` links it two ways:
 
-#### Step 5 — inspect the native assembly
+- `-shared` → `libexample.so`, loadable from Python with `ctypes` just like
+  `simple.py` (`ctypes.CDLL("./build/libexample.so").main()` returns `45`).
+- no `-shared` → a standalone executable `example`. Running it makes `main`'s
+  return value the **process exit code**:
+
+```
+45
+```
+
+This is the binary/executable equivalent of Part A's `simple` — the high-level
+MLIR loop has become an ordinary native program.
+
+#### Step 4 — inspect the native assembly
 
 ```bash
 llc -filetype=asm --relocation-model=pic ./build/example.ll -o ./build/example.s
@@ -298,6 +314,32 @@ objdump -d --no-show-raw-insn ./build/example.o    > ./build/example.dis
 objdump -d --no-show-raw-insn ./build/libexample.so > ./build/libexample.dis
 ```
 
+#### Step 5 — (alternative) `mlir-runner`: JIT-execute directly
+
+Everything above goes through full code generation to a native binary. For quick
+iteration you can instead **skip codegen entirely** and JIT-run the lowered MLIR:
+
+```bash
+mlir-runner -e main -entry-point-result=i32 ./build/example_opt.mlir
+```
+
+`mlir-runner` JIT-compiles and runs the module in-process without producing any
+files. `-e main` names the entry function and `-entry-point-result=i32` tells it
+the return type. Output:
+
+```
+45
+```
+
+(The script also shows the variant with
+`-shared-libs=/opt/homebrew/opt/llvm@20/lib/libmlir_runner_utils.dylib`, needed
+only when your MLIR calls runtime helpers like `printMemref` — not required
+here.)
+
+This is a shortcut for *running* the code, not part of the build-to-native path:
+it consumes `example_opt.mlir` (the output of Step 1), parallel to Steps 2–4
+rather than after them.
+
 ---
 
 ## The big picture
@@ -308,14 +350,16 @@ objdump -d --no-show-raw-insn ./build/libexample.so > ./build/libexample.dis
 | Loops / phi nodes | manual | generated by lowering |
 | Lowering tool | — (already LLVM IR) | `mlir-opt` passes |
 | To LLVM IR | (it *is* LLVM IR) | `mlir-translate` |
-| To native | `llc` → `clang` | `llc` → `clang` |
+| To native (object) | `llc` | `llc` |
+| Shared library + executable | `clang` | `clang` |
 | JIT option | — | `mlir-runner` |
 
-Both programs end up as ordinary native code in a shared library — but MLIR let
-us express the loop at a human level and mechanically lower it, with the phi-node
-bookkeeping handled for us. That lowering machinery is the whole point of MLIR,
-and every later chapter adds *higher* dialects (`memref`, `linalg`, `tensor`,
-`gpu`) on top of this same pipeline.
+Both programs end up as ordinary native code — a shared library *and* a
+standalone executable — but MLIR let us express the loop at a human level and
+mechanically lower it, with the phi-node bookkeeping handled for us. That
+lowering machinery is the whole point of MLIR, and every later chapter adds
+*higher* dialects (`memref`, `linalg`, `tensor`, `gpu`) on top of this same
+pipeline.
 
 ---
 
@@ -324,13 +368,14 @@ and every later chapter adds *higher* dialects (`memref`, `linalg`, `tensor`,
 ```bash
 export PATH="/opt/homebrew/opt/llvm@20/bin:$PATH"
 
-cd 1_llvm_modules && bash build.sh && cd ..   # prints 42, then 42 (from Python)
-cd 2_mlir         && bash build.sh && cd ..   # prints 45 (mlir-runner), builds artifacts
+cd 1_llvm_modules && bash build.sh && cd ..   # exit code 42, then 42 (from Python)
+cd 2_mlir         && bash build.sh && cd ..   # exit code 45 (executable), then 45 (JIT)
 ```
 
 Inspect the generated files under each `build/` directory:
-`example_opt.mlir` (lowered MLIR), `example.ll` (LLVM IR), `example.s`
-(assembly), and `*.dis` (disassembly).
+`example_opt.mlir` (lowered MLIR), `example.ll` (LLVM IR), `example` (executable),
+`libexample.so` (shared library), `example.s` (assembly), and `*.dis`
+(disassembly).
 
 **Next:** [`../2_memory/`](../2_memory/) — how MLIR represents memory with the
 `tensor` and `memref` dialects.
