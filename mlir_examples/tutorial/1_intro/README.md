@@ -1,15 +1,55 @@
 # 1 — Introduction: From LLVM IR to MLIR
 
-This chapter walks the **complete compilation pipeline** twice, on two small
-programs, so you can see exactly what each tool does and what it produces:
+### A compiler is a staircase, not a black box
+
+Most people picture a compiler as a single magic step: source code goes in, a
+mysterious box hums, an executable falls out. That picture is wrong in a way that
+matters. A modern compiler is really a **staircase of small, meaning-preserving
+translations**. At the top you have a representation that's comfortable for
+*humans* — loops, functions, types, tensors. At the bottom you have one that's
+comfortable for *silicon* — registers, branches, fixed-width integers, memory
+addresses. Each step down throws away a little abstraction in exchange for a
+little concreteness, and crucially, **every step preserves what the program
+means**. Compilation is the disciplined act of walking down that staircase
+without ever changing the answer.
+
+The deep idea behind MLIR is hidden in plain sight in its name: **Multi-Level**
+Intermediate Representation. Older compilers had essentially *one* landing on the
+staircase — LLVM has LLVM IR, and everything had to be expressed there, no matter
+how high-level it really was. Want to represent a matrix multiply, a parallel
+loop, or a GPU kernel? You had to shred it down into low-level IR immediately and
+hope the optimizer could reconstruct your intent. MLIR's bet is that the
+staircase should have **as many landings as you need** — each one a *dialect*
+pitched at exactly the right altitude for the thing you're describing — and that
+lowering should be a series of short, well-understood hops between adjacent
+landings rather than one terrifying leap.
+
+### Why this chapter does the same thing twice
+
+The fastest way to feel that idea is to watch the *same trivial program* descend
+the staircase from two different starting heights. So this chapter walks the
+**complete compilation pipeline twice**, on two tiny programs, narrating exactly
+what each tool does and showing you what it emits at every stage:
 
 - [`1_llvm_modules/`](1_llvm_modules/) — a minimal program written in **raw LLVM
-  IR**, compiled to a shared library and called from Python.
-- [`2_mlir/`](2_mlir/) — the same kind of program, but written in **high-level
-  MLIR** (a loop in the `scf` dialect) and lowered all the way down to native
-  code.
+  IR**. We start a few steps from the bottom of the staircase and just walk the
+  rest of the way down: assemble it, link it into a shared library, and call it
+  from Python. This establishes the destination — *native code you can actually
+  run* — and the tools (`llc`, `clang`, `ctypes`) that get you there.
+- [`2_mlir/`](2_mlir/) — the *same kind of program* (now with an actual loop),
+  but written in **high-level MLIR** using the `scf` ("structured control flow")
+  dialect. We start much higher up and let `mlir-opt` mechanically lower it,
+  one pass per step, down to the `llvm` dialect — and then re-join the exact same
+  back-end path from Part A. You'll literally watch a clean `scf.for` loop
+  decompose into basic blocks, then into phi nodes, then into ARM64 registers.
 
-Together they answer: *what does MLIR buy us over plain LLVM IR?*
+Put side by side, the two halves answer the question that motivates the entire
+series: ***what does MLIR actually buy us over plain LLVM IR?*** The short answer
+— *the ability to start higher up the staircase and have the descent handled for
+us* — only becomes convincing once you've seen both climbs with your own eyes.
+Everything in the later chapters (`memref`, `linalg`, `tensor`, `gpu`) is just
+**adding taller landings at the top of this same staircase**; the bottom steps
+never change, which is exactly why we nail them down first, here.
 
 > All commands assume `llvm@20` is on your `PATH`:
 > `export PATH="/opt/homebrew/opt/llvm@20/bin:$PATH"`. Outputs shown below were
@@ -19,6 +59,20 @@ Together they answer: *what does MLIR buy us over plain LLVM IR?*
 ---
 
 ## Part A — `1_llvm_modules/`: raw LLVM IR
+
+**Why start here?** Before reaching for MLIR it's worth seeing the layer
+*underneath* it. MLIR's whole job is to eventually produce LLVM IR, so if you
+understand how a tiny piece of LLVM IR becomes a callable native function, the
+MLIR pipeline in Part B is just the same path with extra lowering stages bolted
+on the front. We also establish the end goal up front: **a shared library Python
+can call**, which is the bridge we use to drive compiled code from the ML
+ecosystem.
+
+> **What's a "module"?** Every LLVM IR file is a *module* — the top-level
+> container holding functions, globals, and metadata, roughly the IR equivalent
+> of one translation unit (one `.c` file). MLIR borrows the same idea: its
+> top-level container is also a `module`. Compilation, at every level, is a
+> series of transformations from one module to another.
 
 ### The source: [`simple.ll`](1_llvm_modules/simple.ll)
 
@@ -39,6 +93,18 @@ int main() {
 `define i32 @main()` declares a function named `main` returning a 32-bit
 integer; `ret i32 42` returns the constant `42`.
 
+A few conventions worth naming, because they recur in MLIR too:
+
+- **`@` is a symbol (global) name.** `@main` is a globally visible function
+  symbol — the same name the linker and `ctypes` look up later. (Local SSA values
+  use `%` instead; we'll see those in Part B.)
+- **Types are explicit everywhere.** `i32` is an arbitrary-width integer type —
+  LLVM has `i1`, `i8`, `i64`, etc. There is no implicit `int`; the width is
+  always written out, which is what lets the same IR target many architectures.
+- **It's already SSA.** Even this trivial function is in *Static Single
+  Assignment* form (every value is assigned exactly once). That constraint is
+  invisible here but becomes the central plot point in Part B.
+
 ### The build: [`build.sh`](1_llvm_modules/build.sh)
 
 ```bash
@@ -50,13 +116,19 @@ clang ./build/simple.o -o ./build/simple   # optional executable          # 3
 python3 simple.py                                                        # 5
 ```
 
-**Step 1 — `llc`: LLVM IR → object code.** `llc` is LLVM's static compiler. It
-turns the textual IR into a native object file (`.o`). `--relocation-model=pic`
-emits *position-independent code*, which is required for a shared library.
+**Step 1 — `llc`: LLVM IR → object code.** `llc` is LLVM's static compiler — the
+back end that does instruction selection and register allocation and emits a
+native object file (`.o`) full of machine code. `--relocation-model=pic` emits
+*position-independent code*: code that works no matter what address it's loaded
+at. That's required for a shared library, because the OS may map it anywhere in a
+process's address space.
 
-**Step 2 — `clang -shared`: object → shared library.** Links the object into
-`libsimple.so` (a `.dylib`-style shared object on macOS) that other programs —
-including Python — can load at runtime.
+**Step 2 — `clang -shared`: object → shared library.** A bare `.o` isn't directly
+loadable; the linker has to package it. This step links the object into
+`libsimple.so` (a `.dylib`-style shared object on macOS) — a self-contained,
+dynamically loadable unit that other programs, including the Python interpreter,
+can `dlopen` at runtime and call into. This is the artifact that makes Step 5
+possible.
 
 **Step 3 — `clang`: object → executable.** Optionally links the same object into
 a standalone runnable binary `simple`.
@@ -119,6 +191,15 @@ a loop in raw LLVM IR means manually managing basic blocks and **phi nodes**
 (the SSA construct that merges values across control-flow paths). MLIR lets us
 write the loop at a high level and *lower* it for us.
 
+> **Why loops are awkward in SSA.** SSA says every value is assigned exactly
+> once — but a loop counter is, by definition, a thing that *changes*. LLVM
+> reconciles this with a **phi node**: a pseudo-instruction at the top of a block
+> that says "my value is whichever incoming value corresponds to the edge we
+> arrived on" (e.g. `0` on the first entry, `previous + 1` on each loop back).
+> It's correct but fiddly bookkeeping, and you must write it by hand in raw LLVM
+> IR. The motivation for Part B is watching MLIR generate all of it for us from a
+> plain `scf.for`.
+
 ### The source: [`example.mlir`](2_mlir/example.mlir)
 
 ```mlir
@@ -166,6 +247,23 @@ The single file touches **four dialects** — `func` (functions & `call`), `inde
 (loop bounds / induction var), `scf` (the structured `scf.for` loop), and `arith`
 (`addi`, `index_cast`). See the comments above for what each line does.
 
+This mixing is the point of MLIR, not an accident: dialects are designed to
+**coexist in one module**, each modelling the part of the program it's best
+suited to. There's no separate "control-flow IR" and "arithmetic IR" file — the
+loop (`scf`), the math inside it (`arith`), and the addressing types (`index`)
+all live together and get lowered independently. Two type details are worth
+calling out:
+
+- **`index` is platform-sized.** Like C's `size_t`, an `index` is whatever the
+  target's natural pointer-width integer is (64-bit on Apple Silicon). It's the
+  right type for loop counters and array offsets because it always matches the
+  machine. That's also why `main` needs `arith.index_cast` to narrow it to a
+  fixed-width `i32` before returning a normal exit code.
+- **`scf.for` *returns* a value.** Unlike a C `for` loop (a statement that
+  mutates a variable), `scf.for` with `iter_args` is an expression that yields
+  its final loop-carried value — a more functional framing that keeps the IR in
+  SSA form without any phi nodes at this level.
+
 > **Result preview:** the loop sums `0..9`, so the program returns **45**, not
 > 42. (Different from Part A on purpose.)
 
@@ -187,11 +285,24 @@ mlir-opt example.mlir \
   -o ./build/example_opt.mlir
 ```
 
-Each `--convert-X-to-Y` flag is a **pass** that rewrites one dialect into a
-lower one. The order matters: `convert-scf-to-cf` turns the structured loop into
-unstructured branches (`cf` dialect), and **only then** can `convert-cf-to-llvm`
-turn those branches into the `llvm` dialect. `reconcile-unrealized-casts` cleans
-up the temporary cast ops the conversions insert.
+**What "lowering" actually means.** Lowering is translating an operation from a
+higher-level dialect into one or more operations from a lower-level dialect that
+have the same runtime behaviour but less abstraction. You never lower the whole
+program in one leap; you apply a *sequence* of small, focused passes, each
+responsible for one dialect, until everything has bottomed out in the `llvm`
+dialect. That incremental, pass-by-pass design is exactly what makes the
+machinery reusable — every dialect only has to know how to take one step down.
+
+Each `--convert-X-to-Y` flag is one such **pass**, rewriting one dialect into a
+lower one. The order matters because passes form a *dependency chain*:
+`convert-scf-to-cf` turns the structured loop into unstructured branches (`cf`
+dialect), and **only then** can `convert-cf-to-llvm` turn those branches into the
+`llvm` dialect — run them in the wrong order and the second pass sees ops it
+doesn't recognise and does nothing. While a conversion is in progress, the module
+can be temporarily "mixed" (some ops converted, some not); MLIR bridges the two
+worlds with `unrealized_conversion_cast` placeholders, and
+`reconcile-unrealized-casts` removes them once every dialect has been lowered and
+the casts cancel out.
 
 The result, `build/example_opt.mlir`, is entirely in the `llvm` dialect — note
 how the `scf.for` loop has become explicit basic blocks and branches:
@@ -231,9 +342,23 @@ The loop's carried value (`iter_args`) became the **block arguments** of `^bb1`
 mlir-translate ./build/example_opt.mlir -mlir-to-llvmir -o ./build/example.ll
 ```
 
-This crosses out of MLIR into textual **LLVM IR**. Notice that here the loop is
-expressed with real **phi nodes** (`%2`, `%3`) — exactly the bookkeeping MLIR
-saved us from writing by hand:
+This crosses out of MLIR into textual **LLVM IR**.
+
+> **The `llvm` dialect is not LLVM IR.** This catches everyone at first. After
+> Step 1 the module is in the *`llvm` dialect* — still MLIR data structures,
+> still parsed and printed by MLIR tools, just using ops that mirror LLVM IR
+> one-to-one. It is *not yet* LLVM IR. `mlir-translate` is the bridge that
+> finally leaves the MLIR universe and emits actual LLVM IR text (`.ll`) that the
+> rest of the LLVM toolchain (`llc`, `opt`, `clang`) understands. The split
+> exists so MLIR can keep a faithful in-memory model of LLVM IR — and run its own
+> passes on it — without depending on LLVM's own data structures until the very
+> last moment.
+
+Notice that here the loop is expressed with real **phi nodes** (`%2`, `%3`) —
+exactly the bookkeeping MLIR saved us from writing by hand. This is the same loop
+as the `^bb1(%4, %5)` block arguments from Step 1: `mlir-translate` converts
+MLIR's block-argument form into LLVM's phi-node form, since LLVM IR has no notion
+of block arguments.
 
 ```llvm
 define i64 @loop_add() {
@@ -288,8 +413,13 @@ MLIR loop has become an ordinary native program.
 llc -filetype=asm --relocation-model=pic ./build/example.ll -o ./build/example.s
 ```
 
-On Apple Silicon this emits ARM64. The optimizer recognized the loop and the
-`loop_add` body compiles to a tight inner loop:
+Inspecting the assembly is the final sanity check that the whole chain produced
+*good* code, not just *correct* code — it's where you confirm the optimizer did
+its job. On Apple Silicon this emits ARM64. Notice the payoff of running through
+the real LLVM back end: the loop bound `10` from our MLIR has become the
+immediate `#9` in the `cmp`, the induction variable and accumulator live entirely
+in registers (`x8`, `x0`) with no memory traffic, and the body is a tight inner
+loop with a single conditional branch:
 
 ```asm
 _loop_add:                              ; @loop_add
@@ -316,8 +446,18 @@ objdump -d --no-show-raw-insn ./build/libexample.so > ./build/libexample.dis
 
 #### Step 5 — (alternative) `mlir-runner`: JIT-execute directly
 
-Everything above goes through full code generation to a native binary. For quick
-iteration you can instead **skip codegen entirely** and JIT-run the lowered MLIR:
+There are two ways to actually *run* compiled code, and it's worth having the
+names straight because later chapters use both:
+
+- **AOT (ahead-of-time)** — Steps 2–4: produce a `.so`/executable on disk now,
+  run it later. This is what you ship.
+- **JIT (just-in-time)** — this step: compile to machine code *in memory* at the
+  moment you run, execute immediately, produce no files. This is what you reach
+  for while iterating.
+
+Everything above goes through full AOT code generation to a native binary. For
+quick iteration you can instead **skip codegen entirely** and JIT-run the lowered
+MLIR:
 
 ```bash
 mlir-runner -e main -entry-point-result=i32 ./build/example_opt.mlir
