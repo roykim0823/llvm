@@ -60,6 +60,20 @@ hardware-specific is that address?*
   register. This is what a memref descriptor is ultimately *built out of* once it
   finishes lowering, and what maps onto real addresses and AVX/NEON lanes.
 
+```text
+   more abstract  ┌──────────────────────────────────────────────┐  "lives nowhere"
+        ▲         │ tensor<?x?xf32>     a value: shape, no address │  (SSA, immutable)
+        │         └──────────────────────────────────────────────┘
+        │            │  bufferization   ← the one big crossing (top → middle)
+        │         ┌──────────────────────────────────────────────┐  "has a home,
+        │         │ memref<?x?xf32>     ptr+offset+shape+strides   │   but abstract"
+        │         └──────────────────────────────────────────────┘  (addressable)
+        │            │  -finalize-memref-to-llvm / -convert-vector-to-llvm
+        ▼         ┌──────────────────────────────────────────────┐  "raw storage"
+   more concrete  │ !llvm.struct/array,  vector<8xf32>            │  (C aggregate,
+                  └──────────────────────────────────────────────┘   SIMD register)
+```
+
 | Layer | What it is | Mutable? | Has an address? | Hardware-specific? | Dialect |
 | --- | --- | --- | --- | --- | --- |
 | **Tensor** | Pure mathematical value (a NumPy array as a *value*) | No (SSA) | No | No | `tensor` |
@@ -207,16 +221,16 @@ boundary — i.e. the calling convention:
 PDF-faithful form: the function takes the two dimensions and *returns* a fresh
 `tensor<?x?xi32>`.
 
+*1_tensor/identity_return.mlir* (the function)
 ```mlir
-func.func @identity(%m: index, %n: index) -> tensor<?x?xi32>
-    attributes {llvm.emit_c_interface} {
+func.func @identity(%m : index, %n : index) -> tensor<?x?xi32> attributes {llvm.emit_c_interface} {
   %out = tensor.generate %m, %n {
-  ^bb0(%i: index, %j: index):                 // region runs once per (i, j)
-    %ni = arith.index_cast %i : index to i32
+  ^bb0(%i : index, %j : index):                  // region runs for every (i, j)
+    %ni = arith.index_cast %i : index to i32      // index -> i32 so we can compare
     %nj = arith.index_cast %j : index to i32
-    %eq = arith.cmpi eq, %ni, %nj : i32        // i == j ?  -> i1
-    %v  = arith.extui %eq : i1 to i32          // widen to i32 (1 or 0)
-    tensor.yield %v : i32                       // value of element (i, j)
+    %eq = arith.cmpi eq, %ni, %nj : i32           // i == j ?  -> i1 (1 on the diagonal)
+    %v  = arith.extui %eq : i1 to i32             // widen i1 to i32 (1 or 0)
+    tensor.yield %v : i32                          // value of this (i, j) element
   } : tensor<?x?xi32>
   return %out : tensor<?x?xi32>
 }
@@ -231,27 +245,28 @@ which is why the C caller ends up owning a `malloc`'d buffer it must `free`.
 function takes the output `memref<?x?xi32>` as a parameter and returns nothing;
 the same `tensor.generate` result is written into that buffer.
 
+*1_tensor/identity_fill.mlir* (the function)
 ```mlir
-func.func @identity(%out: memref<?x?xi32>) attributes {llvm.emit_c_interface} {
-  %c0 = arith.constant 0 : index
-  %c1 = arith.constant 1 : index
-  %m = memref.dim %out, %c0 : memref<?x?xi32>   // read dims FROM the buffer
-  %n = memref.dim %out, %c1 : memref<?x?xi32>
+module {
+  func.func @identity(%out: memref<?x?xi32>) attributes {llvm.emit_c_interface} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %m = memref.dim %out, %c0 : memref<?x?xi32>
+    %n = memref.dim %out, %c1 : memref<?x?xi32>
 
-  %t = tensor.generate %m, %n {
-  ^bb0(%i: index, %j: index):                    // identical generate body
-    %ni = arith.index_cast %i : index to i32
-    %nj = arith.index_cast %j : index to i32
-    %eq = arith.cmpi eq, %ni, %nj : i32
-    %v  = arith.extui %eq : i1 to i32
-    tensor.yield %v : i32
-  } : tensor<?x?xi32>
+    %t = tensor.generate %m, %n {
+      ^bb0(%i: index, %j: index):
+        %ni = arith.index_cast %i : index to i32
+        %nj = arith.index_cast %j : index to i32
+        %eq = arith.cmpi eq, %ni, %nj : i32
+        %v  = arith.extui %eq : i1 to i32
+        tensor.yield %v : i32
+    } : tensor<?x?xi32>
 
-  // Write the generated tensor straight into the caller's buffer — no new
-  // allocation, no copy.
-  bufferization.materialize_in_destination %t in writable %out
-    : (tensor<?x?xi32>, memref<?x?xi32>) -> ()
-  return
+    bufferization.materialize_in_destination %t in writable %out
+      : (tensor<?x?xi32>, memref<?x?xi32>) -> ()
+    return
+  }
 }
 ```
 
@@ -365,6 +380,30 @@ The one new lowering pass versus Chapter 1 is `-finalize-memref-to-llvm`, which
 turns `memref.load`/`store` and the descriptor struct itself into plain LLVM
 pointer arithmetic — the moment the abstraction finally becomes addresses.
 
+*2_array_add/array_add.mlir* (the kernel)
+```mlir
+module {
+  func.func @array_add(%arg0: memref<1024xf32>,    // input  a
+                       %arg1: memref<1024xf32>,     // input  b
+                       %arg2: memref<1024xf32>)     // output c (written in place)
+      attributes {llvm.emit_c_interface} {
+    // Loop bounds are `index`-typed (platform-sized integers).
+    %c0    = arith.constant 0    : index   // start
+    %c1024 = arith.constant 1024 : index   // end (exclusive)
+    %c1    = arith.constant 1    : index   // step
+
+    // One element per iteration: load a[i] and b[i], add, store into c[i].
+    scf.for %arg3 = %c0 to %c1024 step %c1 {
+      %0 = memref.load %arg0[%arg3] : memref<1024xf32>   // a[i]
+      %1 = memref.load %arg1[%arg3] : memref<1024xf32>   // b[i]
+      %2 = arith.addf %0, %1 : f32                        // a[i] + b[i]
+      memref.store %2, %arg2[%arg3] : memref<1024xf32>   // c[i] = ...
+    }
+    return
+  }
+}
+```
+
 **Files:**
 
 | File | Role |
@@ -412,29 +451,44 @@ MLIR's memref descriptor exactly. That bridge is
 [`common/np_memref.py`](common/np_memref.py): a `ctypes.Structure` mirroring the
 descriptor, plus a helper that populates it from a NumPy array.
 
+*common/np_memref.py* (the descriptor + adapter)
 ```python
 import numpy as np
 from ctypes import c_void_p, c_longlong, Structure
 
+
 class MemRefDescriptor(Structure):
-  """ctypes layout matching MLIR's 1-D memref descriptor."""
+  """ctypes layout matching MLIR's 1-D memref descriptor.
+
+  Must match the struct that `-finalize-memref-to-llvm` produces for a
+  memref<Nxf32>:  { ptr, ptr, i64, [1 x i64], [1 x i64] }.
+  """
   _fields_ = [
-    ("allocated", c_void_p),    # base pointer (the one you'd free())
-    ("aligned",   c_void_p),    # aligned data pointer (used for access)
-    ("offset",    c_longlong),  # offset into data, in ELEMENTS (not bytes)
+    ("allocated", c_void_p),        # base pointer (the one you'd free())
+    ("aligned",   c_void_p),        # aligned data pointer (often same as allocated)
+    ("offset",    c_longlong),      # offset into data, in ELEMENTS (not bytes)
     ("shape",     c_longlong * 1),
     ("stride",    c_longlong * 1),
   ]
 
+
 def numpy_to_memref(arr):
+  """Wrap a 1-D contiguous NumPy array in a MemRefDescriptor (no copy).
+
+  The descriptor points straight at the NumPy buffer, so MLIR and NumPy
+  share the same memory. `allocated` and `aligned` are set to the same
+  pointer because NumPy gives us a single buffer with no separate
+  free-handle (and nothing here ever free()s it).
+  """
   if not arr.flags["C_CONTIGUOUS"]:
-    arr = np.ascontiguousarray(arr)   # MLIR assumes a contiguous buffer
+    arr = np.ascontiguousarray(arr)
+
   desc = MemRefDescriptor()
-  desc.allocated = arr.ctypes.data_as(c_void_p)  # point straight at NumPy's buffer
-  desc.aligned   = desc.allocated                # same pointer, no separate alloc
+  desc.allocated = arr.ctypes.data_as(c_void_p)
+  desc.aligned   = desc.allocated
   desc.offset    = 0
   desc.shape[0]  = arr.shape[0]
-  desc.stride[0] = 1                             # contiguous 1-D: 1 element/step
+  desc.stride[0] = 1            # contiguous 1-D: stride is 1 element
   return desc
 ```
 
@@ -446,6 +500,16 @@ consecutive elements in each dimension. The `numpy_to_memref` helper then does
 four things — ensure the array is contiguous, create the descriptor, point it at
 the NumPy buffer, and configure shape/stride — **without copying** the underlying
 data.
+
+```text
+   NumPy ndarray            ONE buffer in RAM            MLIR memref descriptor
+   ┌──────────────┐        ┌───────────────────┐        ┌──────────────────┐
+   │ .ctypes.data ├───────►│ f32 f32 f32 … f32  │◄───────┤ allocated/aligned│
+   │ .shape (N,)  │        └───────────────────┘        │ shape[0] = N     │
+   │ .strides     │         (no copy — both              │ stride[0] = 1    │
+   └──────────────┘          descriptors point here)     │ offset = 0       │
+                                                         └──────────────────┘
+```
 
 **Why this is zero-copy.** Both sides describe the same thing: `numpy_to_memref`
 reads `arr.ctypes.data` (NumPy's base pointer) and writes it into a descriptor
@@ -665,12 +729,25 @@ The one runnable file is Step 2's kernel, vectorized: the loop steps by 8 and us
 processes 8 floats. On x86 this lowers to a single AVX `vaddps`; on ARM, two NEON
 adds.
 
+*3_low_level_llvm/array_add_vec.mlir*
 ```mlir
-scf.for %i = %c0 to %c1024 step %c8 {
-  %va = vector.load  %arg0[%i] : memref<1024xf32>, vector<8xf32>
-  %vb = vector.load  %arg1[%i] : memref<1024xf32>, vector<8xf32>
-  %vc = arith.addf   %va, %vb  : vector<8xf32>
-  vector.store %vc, %arg2[%i]  : memref<1024xf32>, vector<8xf32>
+module {
+  func.func @array_add(%arg0: memref<1024xf32>,
+                       %arg1: memref<1024xf32>,
+                       %arg2: memref<1024xf32>)
+      attributes {llvm.emit_c_interface} {
+    %c0    = arith.constant 0    : index
+    %c1024 = arith.constant 1024 : index
+    %c8    = arith.constant 8    : index
+
+    scf.for %i = %c0 to %c1024 step %c8 {
+      %va = vector.load %arg0[%i] : memref<1024xf32>, vector<8xf32>
+      %vb = vector.load %arg1[%i] : memref<1024xf32>, vector<8xf32>
+      %vc = arith.addf %va, %vb : vector<8xf32>
+      vector.store %vc, %arg2[%i] : memref<1024xf32>, vector<8xf32>
+    }
+    return
+  }
 }
 ```
 
@@ -723,10 +800,13 @@ function, and `llvm.store`s the result struct back through an out-pointer.
 The kernel `add_vector_to_matrix` is deliberately the **identity** on
 `memref<3xf32>` — the lesson is the calling convention, not the math:
 
+*4_C_compatible_wrappers/add_vector_to_matrix.mlir* (the function)
 ```mlir
-func.func @add_vector_to_matrix(%A: memref<3xf32>)
+module {
+  func.func @add_vector_to_matrix(%A: memref<3xf32>)
     -> memref<3xf32> attributes {llvm.emit_c_interface} {
-  return %A : memref<3xf32>
+    return %A : memref<3xf32>   // identity: hand the input buffer straight back
+  }
 }
 ```
 

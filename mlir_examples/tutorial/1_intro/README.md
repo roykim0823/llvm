@@ -76,6 +76,7 @@ ecosystem.
 
 ### The source: [`simple.ll`](1_llvm_modules/simple.ll)
 
+*1_llvm_modules/simple.ll*
 ```llvm
 define i32 @main() {
 	ret i32 42
@@ -144,6 +145,7 @@ process **exit code**. `echo $?` prints the exit code of the last command:
 the standard-library `ctypes` module to load the shared library and call
 `main()` directly:
 
+*1_llvm_modules/simple.py*
 ```python
 import ctypes
 
@@ -202,6 +204,7 @@ write the loop at a high level and *lower* it for us.
 
 ### The source: [`example.mlir`](2_mlir/example.mlir)
 
+*2_mlir/example.mlir*
 ```mlir
 // loop_add: sum the integers 0..9 using a structured (scf) for-loop.
 // Returns `index` (a platform-sized integer, like size_t).
@@ -307,6 +310,7 @@ the casts cancel out.
 The result, `build/example_opt.mlir`, is entirely in the `llvm` dialect — note
 how the `scf.for` loop has become explicit basic blocks and branches:
 
+*build/example_opt.mlir*
 ```mlir
 module {
   llvm.func @loop_add() -> i64 {
@@ -316,25 +320,27 @@ module {
     %3 = llvm.mlir.constant(1 : i64) : i64
     llvm.br ^bb1(%1, %0 : i64, i64)
   ^bb1(%4: i64, %5: i64):  // 2 preds: ^bb0, ^bb2
-    %6 = llvm.icmp "slt" %4, %2 : i64        // %4 < 10 ?
+    %6 = llvm.icmp "slt" %4, %2 : i64
     llvm.cond_br %6, ^bb2, ^bb3
   ^bb2:  // pred: ^bb1
-    %7 = llvm.add %5, %4 : i64               // sum += iv
-    %8 = llvm.add %4, %3 : i64               // iv  += 1
+    %7 = llvm.add %5, %4 : i64
+    %8 = llvm.add %4, %3 : i64
     llvm.br ^bb1(%8, %7 : i64, i64)
   ^bb3:  // pred: ^bb1
     llvm.return %5 : i64
   }
   llvm.func @main() -> i32 {
     %0 = llvm.call @loop_add() : () -> i64
-    %1 = llvm.trunc %0 : i64 to i32          // index (i64) -> i32
+    %1 = llvm.trunc %0 : i64 to i32
     llvm.return %1 : i32
   }
 }
 ```
 
 The loop's carried value (`iter_args`) became the **block arguments** of `^bb1`
-(`%4` = induction var, `%5` = accumulator) — MLIR's alternative to phi nodes.
+(`%4` = induction var, `%5` = accumulator) — MLIR's alternative to phi nodes:
+`%6 = llvm.icmp "slt" %4, %2` is the `i < 10` test, `%7 = llvm.add %5, %4` is
+`sum += iv`, and `%8 = llvm.add %4, %3` is `iv += 1`.
 
 #### Step 2 — `mlir-translate`: `llvm` dialect → LLVM IR
 
@@ -358,21 +364,29 @@ Notice that here the loop is expressed with real **phi nodes** (`%2`, `%3`) —
 exactly the bookkeeping MLIR saved us from writing by hand. This is the same loop
 as the `^bb1(%4, %5)` block arguments from Step 1: `mlir-translate` converts
 MLIR's block-argument form into LLVM's phi-node form, since LLVM IR has no notion
-of block arguments.
+of block arguments. The two `phi i64` nodes (`%2` the induction variable, `%3`
+the accumulator) are that bookkeeping made explicit:
 
+*build/example.ll*
 ```llvm
+; ModuleID = 'LLVMDialectModule'
+source_filename = "LLVMDialectModule"
+
 define i64 @loop_add() {
   br label %1
-1:                                       ; preds = %5, %0
-  %2 = phi i64 [ %7, %5 ], [ 0, %0 ]     ; induction variable
-  %3 = phi i64 [ %6, %5 ], [ 0, %0 ]     ; accumulator
+
+1:                                                ; preds = %5, %0
+  %2 = phi i64 [ %7, %5 ], [ 0, %0 ]
+  %3 = phi i64 [ %6, %5 ], [ 0, %0 ]
   %4 = icmp slt i64 %2, 10
   br i1 %4, label %5, label %8
-5:                                       ; preds = %1
+
+5:                                                ; preds = %1
   %6 = add i64 %3, %2
   %7 = add i64 %2, 1
   br label %1
-8:                                       ; preds = %1
+
+8:                                                ; preds = %1
   ret i64 %3
 }
 
@@ -381,6 +395,10 @@ define i32 @main() {
   %2 = trunc i64 %1 to i32
   ret i32 %2
 }
+
+!llvm.module.flags = !{!0}
+
+!0 = !{i32 2, !"Debug Info Version", i32 3}
 ```
 
 #### Step 3 — `llc` + `clang`: LLVM IR → object → shared library + executable
@@ -421,6 +439,7 @@ immediate `#9` in the `cmp`, the induction variable and accumulator live entirel
 in registers (`x8`, `x0`) with no memory traffic, and the body is a tight inner
 loop with a single conditional branch:
 
+*build/example.s* (excerpt — the `loop_add` core; `.cfi`/`%bb.0` directives elided, comments added)
 ```asm
 _loop_add:                              ; @loop_add
 	mov	x8, xzr            ; iv  = 0
@@ -483,6 +502,25 @@ rather than after them.
 ---
 
 ## The big picture
+
+The two halves are the *same staircase* entered at different heights — Part A
+starts near the bottom, Part B a few landings up and descends through them:
+
+```text
+   Part B (2_mlir)                          Part A (1_llvm_modules)
+   high-level MLIR    example.mlir  ─┐
+     scf / index / arith / func      │  mlir-opt (lowering passes)
+   llvm dialect       example_opt.mlir│
+     │  mlir-translate                ▼
+   LLVM IR            example.ll  ◄────────  simple.ll   ← Part A starts here
+     │  llc                                   │  llc
+   object (.o)        example.o               simple.o
+     │  clang                                 │  clang
+   native .so / executable  ◄────────────────┘   → callable from Python (ctypes)
+```
+
+Both descents share the bottom steps (`llc` → `clang`); MLIR just adds taller
+landings at the top and walks them down for you.
 
 | | `1_llvm_modules` | `2_mlir` |
 | --- | --- | --- |

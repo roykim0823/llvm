@@ -41,6 +41,32 @@ The full forward pass, every function mapping to ops you already know:
 | `transformer_block` | pre-LN → MHA → residual; pre-LN → FFN → residual | all of it |
 | `gpt2` | embed → N blocks → final LN → project to vocab | the stack |
 
+Notice how directly the code reads as that graph — `attention` is literally its
+one-line formula, every operation something from Chapters 4–5:
+
+*gpt2/model.py* (excerpt — attention and its softmax)
+```python
+def softmax(x):
+  """Row-wise softmax (numerically stable). Turns scores into probabilities."""
+  ex = np.exp(x - np.max(x, axis=-1, keepdims=True))
+  return ex / np.sum(ex, axis=-1, keepdims=True)
+
+# ... layer_norm, linear, ffn ...
+
+def attention(q, k, v, mask):
+  """Scaled dot-product attention: softmax(QKᵀ/√d + mask) · V."""
+  scores = (q @ k.T) / np.sqrt(q.shape[-1]) + mask
+  return softmax(scores) @ v
+```
+
+```text
+   Q ─┐                                                  weighted
+      ├─► Q·Kᵀ ─► ÷√d ─► + mask ─► softmax ─► weights ──►  sum   ─► out
+   K ─┘   scores     scale    hide      row-wise         · V
+   V ────────────────────────future    probabilities
+        (matmul)                       (Part B compiles this)   (matmul)
+```
+
 Two transformer-specific details worth calling out:
 
 - **Causal masking.** A language model must not peek at future tokens, so before
@@ -56,7 +82,7 @@ the prediction is meaningless, but the plumbing — embeddings, the block stack,
 attention, FFN, residuals, layer-norm, and the vocab projection — is exactly the
 real architecture.
 
-**Run:** `python3 demo.py` →
+**Run:** `python3 demo.py`
 
 ```
 GPT-2-style forward pass: 5 tokens, d=12, heads=3, layers=2
@@ -78,19 +104,54 @@ between them:
 out[i,j] = exp(x[i,j] - max_j x[i,:]) / Σ_j exp(x[i,:] - max_j x[i,:])
 ```
 
-`softmax.mlir` implements it with `scf.for` reductions (a `maximumf` accumulator,
-then an `addf` accumulator) and `math.exp` — the same numerically-stable formula
-as the NumPy `softmax`, lowered to native code. The driver checks it against the
-model's own `softmax` and confirms every row sums to 1.
+`softmax.mlir` implements it with three sequential `scf.for` passes per row — a
+`maximumf` accumulator (the row max, subtracted for numerical stability), then an
+`addf` accumulator over `math.exp`, then a divide — the same stable formula as the
+NumPy `softmax` above, lowered to native code:
 
+*mlir_attention/softmax.mlir*
 ```mlir
-%mx  = scf.for ... iter_args(%m = -FLT_MAX) { maximumf ... }   // row max
-%sum = scf.for ... iter_args(%s = 0.0) {                       // exp(x-max), sum
-         %e = math.exp (x - mx); store e; addf ... }
-scf.for ... { divf e, sum }                                    // normalize
+func.func @softmax(%x: memref<?x?xf32>, %out: memref<?x?xf32>)
+    attributes {llvm.emit_c_interface} {
+  %c0   = arith.constant 0 : index
+  %c1   = arith.constant 1 : index
+  %N    = memref.dim %x, %c0 : memref<?x?xf32>
+  %M    = memref.dim %x, %c1 : memref<?x?xf32>
+  %ninf = arith.constant -3.40282347E+38 : f32   // -FLT_MAX, the max identity
+  %zero = arith.constant 0.0 : f32
+
+  scf.for %i = %c0 to %N step %c1 {
+    // 1. row maximum
+    %mx = scf.for %j = %c0 to %M step %c1 iter_args(%m = %ninf) -> (f32) {
+      %v  = memref.load %x[%i, %j] : memref<?x?xf32>
+      %mm = arith.maximumf %m, %v : f32
+      scf.yield %mm : f32
+    }
+    // 2. exp(x - max), stored into out, accumulating the row sum
+    %sum = scf.for %j = %c0 to %M step %c1 iter_args(%s = %zero) -> (f32) {
+      %v = memref.load %x[%i, %j] : memref<?x?xf32>
+      %d = arith.subf %v, %mx : f32
+      %e = math.exp %d : f32
+      memref.store %e, %out[%i, %j] : memref<?x?xf32>
+      %ss = arith.addf %s, %e : f32
+      scf.yield %ss : f32
+    }
+    // 3. normalize the row by its sum
+    scf.for %j = %c0 to %M step %c1 {
+      %e = memref.load %out[%i, %j] : memref<?x?xf32>
+      %r = arith.divf %e, %sum : f32
+      memref.store %r, %out[%i, %j] : memref<?x?xf32>
+    }
+  }
+  return
+}
 ```
 
-**Run:** `cd mlir_attention && bash build.sh` →
+The two `iter_args` accumulators are Chapter 3's loop-carried values again (the
+`maximumf`/`addf` reductions), and `math.exp` lowers to a libm call. The driver
+checks it against the model's own `softmax` and confirms every row sums to 1.
+
+**Run:** `cd mlir_attention && bash build.sh`
 
 ```
 MLIR softmax successful! (max abs error 0.00e+00; every row sums to 1)
@@ -132,8 +193,11 @@ python3 demo.py                          # Part A — the model
 - **Self-attention** = `softmax(QKᵀ/√d + mask) · V`: project to Q/K/V, score,
   mask the future, softmax, weight the Values; run it in parallel **heads**.
 - **Softmax is the interesting op to compile** because of its per-row reductions;
-  `math.exp` + `scf.for` reductions reproduce the stable formula exactly.
+  `math.exp` + `scf.for` reductions (with `iter_args`, Ch 3) reproduce the stable
+  formula exactly.
 - **The model is a compiler workload.** Frameworks lower exactly this graph to
   `linalg`/`tensor` and optimize it — and the next chapter moves it to the GPU.
 
 **Next:** Part 8 — GPU compilation with MLIR (see [`../reference/`](../reference/)).
+```
+

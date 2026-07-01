@@ -43,6 +43,18 @@ forms are *equal* and keeps both:
 - A rewrite `lhs → rhs` doesn't replace anything; it **adds** `rhs` and **merges**
   its e-class with the one that matched `lhs`.
 
+```text
+   destructive rewrite            e-graph: keep both, mark them equal
+   (a*2)/2  ──►  a                 ┌─ e-class ───────────────┐
+   (original is gone)              │  (a*2)/2   ≡   a<<1/2    │  all equal;
+                                   │      ≡        ≡   a      │  extraction
+                                   └─────────────────────────┘  picks cheapest
+```
+
+That "keep both" is the whole trick: applying `x*2 → x<<1` no longer *destroys*
+the `(a*2)/2` form, so `(x*y)/y → x` can still fire on it. The stuck-term problem
+disappears because nothing ever gets stuck — every form coexists.
+
 The algorithm is three phases ([`egraph.py`](egraph.py)):
 
 1. **Saturate** — apply *every* rule everywhere, repeatedly, until no new
@@ -51,6 +63,22 @@ The algorithm is three phases ([`egraph.py`](egraph.py)):
    an e-class too).
 3. **Extract** — walk the graph picking, for each e-class, the lowest-cost e-node
    according to a **cost model**, and read out the cheapest equivalent term.
+
+A rewrite therefore never deletes; it only ever `merge`s the matched class with a
+freshly-added right-hand side:
+
+*egraph.py* (a rewrite adds `rhs` and merges — never replaces)
+```python
+  def merge(self, a, b):
+    """Declare two e-classes equivalent."""
+    a, b = self.find(a), self.find(b)
+    if a == b:
+      return a
+    self.parent[b] = a
+    self.nodes[a] |= self.nodes[b]
+    self.nodes[b] = set()
+    return a
+```
 
 The cost model is just a number per operation — `exp` is dear, `+` is cheap — so
 extraction naturally prefers `e^{3x}` (one `exp`) over `e^x·e^x·e^x` (three).
@@ -75,20 +103,22 @@ extraction naturally prefers `e^{3x}` (one `exp`) over `e^x·e^x·e^x` (three).
 Each builds an expression, saturates a small rule set, and extracts the cheapest
 form:
 
+**Run:** `python3 optimize_demo.py`
+
 ```
-  (a*2)/2           ->  a                       # cancellation beats strength-reduction
-  e^x * e^x * e^x   ->  exp(((x + x) + x))      # cost model collapses 3 exps to 1
-  (A^T)^T           ->  A                        # a free linear-algebra identity
+Equality saturation — extracting the cheapest equivalent form:
+  (a*2)/2           ->  a
+  e^x * e^x * e^x   ->  exp(((x + x) + x))
+  (A^T)^T           ->  A
+All e-graph demos succeeded.
 ```
 
 The first is the phase-ordering example: the e-graph holds `a*2`, `a<<1`, *and*
 the cancelled `a` simultaneously, so extraction simply reads off `a` — no rule
 ordering required. The second shows the **cost model** doing the deciding (with
-`exp` priced at 40 and `+` at 1, the single-`exp` form wins). The third is the
-kind of tensor identity that lets you delete an operation `linalg` would otherwise
-dutifully compute.
-
-**Run:** `python3 optimize_demo.py`
+`exp` priced at 40 and `+` at 1, the single-`exp` form `exp((x+x)+x)` wins over
+three exps). The third is the kind of tensor identity that lets you delete an
+operation `linalg` would otherwise dutifully compute.
 
 ---
 
@@ -108,8 +138,28 @@ f(a) = a * a                      # 1 op
 ```
 
 `capstone.py` emits MLIR for **both** forms via `to_mlir.py` (free symbols become
-`f32` arguments, the tree becomes `arith` ops):
+`f32` arguments, the tree becomes `arith` ops). The contrast is the whole point —
+five arithmetic ops become one. Before:
 
+*build/orig.mlir* (the 5-op original)
+```mlir
+func.func @f(%a: f32) -> f32 {
+  %v1 = arith.constant 2.000000e+00 : f32
+  %v2 = arith.mulf %a, %v1 : f32
+  %v3 = arith.constant 2.000000e+00 : f32
+  %v4 = arith.divf %v2, %v3 : f32
+  %v5 = arith.constant 2.000000e+00 : f32
+  %v6 = arith.mulf %a, %v5 : f32
+  %v7 = arith.constant 2.000000e+00 : f32
+  %v8 = arith.divf %v6, %v7 : f32
+  %v9 = arith.mulf %v4, %v8 : f32
+  return %v9 : f32
+}
+```
+
+after:
+
+*build/opt.mlir* (the extracted 1-op form)
 ```mlir
 func.func @f(%a: f32) -> f32 {
   %v1 = arith.mulf %a, %a : f32
@@ -122,11 +172,14 @@ func.func @f(%a: f32) -> f32 {
 over a range of inputs to confirm the rewrite **preserved meaning** while cutting
 5 operations to 1.
 
-**Run:** `cd 6_egraph && bash build.sh` →
+**Run:** `cd 6_egraph && bash build.sh`
 
 ```
 original :  (((a * 2) / 2) * ((a * 2) / 2))   (5 ops)
 optimized:  (a * a)   (1 ops)
+Wrote build/orig.mlir and build/opt.mlir
+```
+```
 Capstone OK: optimized f(a) == original f(a) == a*a for all test inputs.
 ```
 
@@ -143,8 +196,9 @@ cd 6_egraph && bash build.sh          # demos + compiled capstone (needs no extr
 
 - **E-graphs solve phase ordering** by keeping every equivalent form at once, then
   extracting the best — so rewrite order stops mattering.
-- **Equality saturation** = apply all rules to a fixpoint; **extraction** = pick
-  the cheapest form under a cost model.
+- **Equality saturation** = apply all rules to a fixpoint (`saturate`);
+  **extraction** = pick the cheapest form under a cost model (`extract`); a rewrite
+  only ever `merge`s, never deletes.
 - **This is high-level, domain-aware optimization** that LLVM/`linalg` can't do
   because they lack the algebraic identities — it runs on the core language
   *before* lowering.
@@ -152,3 +206,5 @@ cd 6_egraph && bash build.sh          # demos + compiled capstone (needs no extr
   and compiled, exactly the "core → MLIR → LLVM" path from Chapter 1.
 
 **Next:** Part 7 — Transformers (see [`../reference/`](../reference/)).
+```
+

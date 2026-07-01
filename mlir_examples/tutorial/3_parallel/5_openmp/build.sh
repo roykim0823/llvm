@@ -10,6 +10,14 @@ mkdir -p build
 
 OMP_PREFIX="$(brew --prefix libomp)"
 
+# --- C reference: the same doubling kernel with OpenMP pragmas ----------------
+# `clang -fopenmp` parallelizes the loop; we point it at Homebrew's libomp.
+echo "=== C version (clang -fopenmp) ==="
+clang -fopenmp -I"${OMP_PREFIX}/include" \
+  -L"${OMP_PREFIX}/lib" -Wl,-rpath,"${OMP_PREFIX}/lib" \
+  omp_double.c -o ./build/omp_double_c
+./build/omp_double_c; echo
+
 # --- (inspect) scf.parallel -> omp.parallel/omp.wsloop -----------------------
 mlir-opt scf_parallel.mlir -convert-scf-to-openmp -o ./build/scf_parallel_omp.mlir
 
