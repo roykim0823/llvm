@@ -4,8 +4,13 @@ set -euo pipefail
 rm -rf build
 mkdir -p build
 
-# (inspect) the affine-loop form, to compare with Chapter 3's hand-written nest.
-mlir-opt matmul.mlir -convert-linalg-to-affine-loops -o ./build/matmul_affine.mlir
+# (inspect) the matmul written as an explicit linalg.generic, lowered TWO WAYS to
+# contrast the loop-conversion passes (same nest, different dialect):
+#   -convert-linalg-to-loops         -> scf.for    (generic structured loops)
+#   -convert-linalg-to-affine-loops  -> affine.for (analyzable/tileable — Chapter 3's
+#                                                    nest, verbatim)
+mlir-opt matmul_generic.mlir -convert-linalg-to-loops        -o ./build/matmul_generic_scf.mlir
+mlir-opt matmul_generic.mlir -convert-linalg-to-affine-loops -o ./build/matmul_generic_affine.mlir
 
 # (runnable) lower to scf loops -> llvm dialect and compile.
 mlir-opt matmul.mlir \
