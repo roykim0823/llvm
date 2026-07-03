@@ -14,9 +14,9 @@ python3 capstone.py          # writes build/orig.mlir and build/opt.mlir
 # Compile both the original and the e-graph-optimized MLIR to shared libraries.
 for name in orig opt; do
   mlir-opt "build/${name}.mlir" \
-    -convert-arith-to-llvm \
-    -convert-func-to-llvm \
-    -reconcile-unrealized-casts \
+    --convert-arith-to-llvm \
+    --convert-func-to-llvm \
+    --reconcile-unrealized-casts \
     -o "build/${name}_opt.mlir"
   mlir-translate "build/${name}_opt.mlir" -mlir-to-llvmir -o "build/${name}.ll"
   llc -filetype=obj --relocation-model=pic "build/${name}.ll" -o "build/${name}.o"

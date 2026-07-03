@@ -286,7 +286,6 @@ values that are loop-invariant, so the analysis treats them as constants.
 *2_affine_maps/affine_apply.mlir*
 ```mlir
 // Reusable named maps (the `#name` attribute-alias sigil from Chapter 1):
-// Define some resuable affine maps
 #tile_map    = affine_map<(d0) -> (d0 floordiv 32)>          // which 32-wide tile?
 #offset_map  = affine_map<(d0)[s0] -> (d0 + s0)>            // shift by a symbol
 #complex_map = affine_map<(d0, d1)[s0] -> (d0 * 2 + d1 floordiv 4 + s0)>
@@ -1097,6 +1096,8 @@ the result against a NumPy reference.
 Affine conv2d successful! (output 8x8, max abs error 3.81e-06)
 ```
 
+Inputs are random each run, so the exact error varies.
+
 ---
 
 ## Step 5 — OpenMP (`5_openmp/`) · ✅
@@ -1305,5 +1306,4 @@ executables) into a local `build/` directory.
 - **Two philosophies, one backend.** Automatic (affine) and manual (OpenMP) both
   lower through the same `scf`/`llvm` machinery you already know.
 
-**Next:** Part 4 — Linear algebra and the `linalg` dialect (see
-[`../reference/`](../reference/)).
+**Next:** [`../4_linalg/`](../4_linalg/) — linear algebra and the `linalg` dialect.

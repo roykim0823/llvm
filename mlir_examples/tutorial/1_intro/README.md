@@ -541,7 +541,7 @@ pipeline.
 
 ---
 
-## Run it yourself
+## Run everything
 
 ```bash
 export PATH="/opt/homebrew/opt/llvm@20/bin:$PATH"
@@ -554,6 +554,21 @@ Inspect the generated files under each `build/` directory:
 `example_opt.mlir` (lowered MLIR), `example.ll` (LLVM IR), `example` (executable),
 `libexample.so` (shared library), `example.s` (assembly), and `*.dis`
 (disassembly).
+
+## Key takeaways
+
+- **LLVM IR is the common floor.** Everything — C, Rust, and every MLIR program
+  in this series — eventually becomes the same low-level, SSA-form IR that `llc`
+  turns into native code.
+- **MLIR is many IRs, not one.** Dialects (`func`, `scf`, `index`, `arith`, …)
+  express a program at the right abstraction level; `mlir-opt` passes *lower* it
+  step by step until only the `llvm` dialect remains.
+- **Lowering does the bookkeeping for you.** You wrote `scf.for`; the pipeline
+  synthesized the basic blocks, branches, and phi nodes that Part A made you
+  write by hand.
+- **One IR, three ways to run it:** a standalone executable, a shared library
+  callable from Python via `ctypes`, or straight through the `mlir-runner` JIT —
+  the recurring pattern for every chapter that follows.
 
 **Next:** [`../2_memory/`](../2_memory/) — how MLIR represents memory with the
 `tensor` and `memref` dialects.

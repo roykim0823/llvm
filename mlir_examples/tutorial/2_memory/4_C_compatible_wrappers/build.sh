@@ -2,8 +2,8 @@
 rm -rf build
 mkdir -p build
 
-# Build the vectorized array_add kernel into a shared library that
-# Python can dlopen and call through ctypes.
+# Build the add_vector_to_matrix kernel (the emit_c_interface demo) into a
+# shared library that Python can dlopen and call through ctypes.
 set -euo pipefail
 
 mlir-opt add_vector_to_matrix.mlir \

@@ -440,6 +440,9 @@ Every chapter drives the same handful of tools (installed via Homebrew
 | `llc` | Compile LLVM IR to a native object (`.o`) or assembly (`.s`). |
 | `clang` | Link objects into an executable or shared library (`.so`/`.dylib`). |
 
+(One more tool, `mlir-transform-opt`, drives the Transform dialect; it ships
+alongside the others but this series doesn't use it.)
+
 The recurring pipeline:
 
 ```
@@ -461,13 +464,34 @@ The recurring pipeline:
 | [`5_neural_network/`](5_neural_network/) | Neural networks: from-scratch autodiff & training in Python, plus a dense layer compiled with `linalg`. | ✅ |
 | [`6_egraph/`](6_egraph/) | E-graphs & term rewriting: a from-scratch equality-saturation engine that optimizes expressions, then emits & runs MLIR. | ✅ |
 | [`7_transformer/`](7_transformer/) | Transformers: a NumPy GPT-2 forward pass, plus attention's softmax compiled to MLIR. | ✅ |
-| [`8_gpu/`](8_gpu/) | GPU compilation: lowering a parallel loop through the `gpu` dialect to NVVM/PTX (inspect-only — needs NVIDIA CUDA to run). | ✅ |
+| [`8_gpu/`](8_gpu/) | GPU compilation: one `scf.parallel`, two backends — GPU lowering to NVVM/PTX (inspect-only, NVIDIA needed to run) *and* an OpenMP CPU build that executes on Apple Silicon. | ✅ |
+| [`9_python_bindings/`](9_python_bindings/) | Driving MLIR from Python: the bindings (`mlir.ir`, `PassManager`) as a mini runtime compiler — linalg → real PTX on this Mac, plus in-process CPU execution via `ExecutionEngine`. | ✅ |
 
-All eight chapters are built out and verified on this toolchain (the runnable
-ones execute and check against NumPy; Chapter 8's GPU lowering is inspect-only,
-since running it needs NVIDIA CUDA hardware). The endgame of the full series is
-compiling a small GPT-2-style transformer down toward efficient GPU kernels. The
-`reference/` directory holds the source PDFs for every part.
+All chapters are built out and verified on this toolchain (the runnable ones
+execute and check against NumPy). The GPU-targeting chapters each split into an
+NVIDIA part and an Apple Silicon part: Chapter 8's GPU lowering is inspect-only
+(running the kernel needs NVIDIA CUDA) but the same program executes here as
+OpenMP threads; Chapter 9 emits real PTX locally and also JIT-executes the same
+module on the CPU via the Python bindings (install them via
+[Installing MLIR Python Bindings](#installing-mlir-python-bindings)). The
+endgame of the full series is compiling a small GPT-2-style transformer down
+toward efficient GPU kernels. The `reference/` directory holds the source PDFs
+for every part.
+
+### How to use this tutorial
+
+Work the chapters **in order** — each one builds on vocabulary and code from
+the previous (Chapter 4's matmul reappears in 5 and 7; Chapter 3's parallel
+loop becomes Chapter 8's GPU kernel). Before starting, do the
+[Quick start](#quick-start-macos--homebrew) once so `mlir-opt` is on your PATH;
+after that, every chapter is self-contained: `cd` into it, read the README
+top-to-bottom, and run the `build.sh` scripts as you reach them — the runnable
+ones verify their results against NumPy, so you'll know immediately if
+something is off.
+
+**Prerequisites:** some familiarity with C/C++ and Python is assumed; passing
+familiarity with NVIDIA CUDA helps for the GPU chapters (8–9). No prior
+compiler background is required — concepts are introduced as they appear.
 
 ---
 
@@ -494,7 +518,7 @@ mlir-opt --version        # expect: Homebrew LLVM version 20.x
 
 # 3. Run the first chapter
 cd 1_intro/2_mlir
-bash build.sh
+bash build.sh        # expected output: 45 (twice — once AOT, once JIT)
 ```
 
 The rest of this section explains *why* those commands look the way they do, and
@@ -967,10 +991,3 @@ python -c "import mlir; from mlir.ir import Context; print('mlir bindings OK')"
 | `import mlir` fails in Python | Bindings built against a different Python than the one you're running, or `PYTHONPATH` not set. Rebuild with the right `-DPython3_EXECUTABLE`. |
 | Source build runs out of disk / RAM | Use `-DCMAKE_BUILD_TYPE=Release`, `-DLLVM_TARGETS_TO_BUILD="Native"`, and link with `lld` (`-DLLVM_ENABLE_LLD=On`) to cut memory during linking. |
 
----
-
-## Prerequisites
-
-Some familiarity with C/C++ and Python is assumed; passing familiarity with
-NVIDIA CUDA helps for the later GPU chapters. No prior compiler background is
-required — concepts are introduced as they appear.

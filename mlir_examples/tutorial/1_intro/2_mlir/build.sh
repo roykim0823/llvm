@@ -37,5 +37,8 @@ objdump -d --no-show-raw-insn ./build/libexample.so > ./build/libexample.dis
 #    Useful for quick iteration; prints the i32 result (45).
 mlir-runner -e main -entry-point-result=i32 ./build/example_opt.mlir
 
-# To use the runner utils (e.g. for debug printing) pass the runtime support lib:
-mlir-runner -e main -entry-point-result=i32 -shared-libs=/opt/homebrew/opt/llvm@20/lib/libmlir_runner_utils.dylib ./build/example_opt.mlir
+# To use the runner utils (e.g. for debug printing) you would additionally pass
+# the runtime support library — not needed for this example:
+#   mlir-runner -e main -entry-point-result=i32 \
+#     -shared-libs=/opt/homebrew/opt/llvm@20/lib/libmlir_runner_utils.dylib \
+#     ./build/example_opt.mlir

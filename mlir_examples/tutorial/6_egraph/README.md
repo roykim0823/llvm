@@ -23,6 +23,17 @@ if you greedily apply the first rule you get the stuck term `(a<<1)/2` and miss 
 cancellation. Which rule, in which order? **Equality saturation** sidesteps the
 question entirely.
 
+This is not a solved problem you're re-implementing for sport — it's a live
+frontier. Every rewriter that LLVM and MLIR ship today (`InstCombine`, the
+greedy pattern rewriter, PDL patterns) is *destructive* and therefore
+phase-ordered; **no upstream dialect or pass does equality saturation**. Yet one
+production compiler (Cranelift, the WebAssembly backend) has already rebuilt its
+entire mid-end on e-graphs, and two active research lines are racing to bring
+them to MLIR. This chapter builds the technique from scratch and ends the way
+those projects do — extract, emit IR, compile; the
+[closing section](#where-e-graphs-stand-in-real-compilers-2026) maps what you
+built here onto that landscape.
+
 > Based on Stephen Diehl's *"MLIR Part 6 — Specializing Python with E-graphs"*
 > ([`../reference/`](../reference/)). That part uses the `egglog` library (whose
 > API churns); to keep the chapter self-contained and runnable, we build a small
@@ -205,6 +216,70 @@ cd 6_egraph && bash build.sh          # demos + compiled capstone (needs no extr
 - **It still ends in MLIR**: the optimized expression is emitted as `arith` ops
   and compiled, exactly the "core → MLIR → LLVM" path from Chapter 1.
 
-**Next:** Part 7 — Transformers (see [`../reference/`](../reference/)).
-```
+---
+
+## Where e-graphs stand in real compilers (2026)
+
+A fair question after this chapter: *if equality saturation is this good, why
+isn't it just a `mlir-opt` flag?* Status check, as of mid-2026:
+
+**Upstream LLVM/MLIR: nothing.** MLIR documents 50-odd dialects and none is an
+e-graph; all of its rewrite machinery (greedy pattern rewriter, PDL/PDLL, the
+Transform dialect) applies patterns destructively, which is exactly the
+phase-ordering trap this chapter opened with. LLVM's closest relative is
+`NewGVN`, which builds congruence classes of equal values — the same
+union-find machinery as our `merge`/`find` — but only to deduplicate, never to
+saturate with algebraic rules or extract by cost.
+
+**Production proof: Cranelift's ægraphs.** The Wasmtime/Cranelift compiler
+replaced its whole machine-independent mid-end with an *acyclic e-graph*
+("ægraph") in 2022 — rewrite rules written in a DSL (ISLE), GVN and LICM
+falling out of the representation "for free", cost-based extraction at the end
+([RFC](https://github.com/bytecodealliance/rfcs/blob/main/accepted/cranelift-egraph.md),
+[EGRAPHS 2023 paper](https://pldi23.sigplan.org/details/egraphs-2023-papers/2/-graphs-Acyclic-E-graphs-for-Efficient-Optimization-in-a-Production-Compiler),
+[design write-up](https://cfallin.org/blog/2026/04/09/aegraph/)). It's the
+existence proof that e-graphs can carry a shipping compiler, and its
+restriction to *acyclic* e-graphs with immediate rewriting is a deliberate
+trade of completeness for predictable compile times.
+
+**Bridging MLIR to an external engine: DialEgg.** [DialEgg (CGO
+2025)](https://dl.acm.org/doi/10.1145/3696443.3708957), from McGill, translates
+MLIR ops into facts for [egglog](https://github.com/egraphs-good/egglog) (the
+successor to the `egg` Rust library), saturates there, extracts, and rebuilds
+MLIR — dialect-agnostically, so `linalg`-level identities like our
+`(Aᵀ)ᵀ → A` are in scope. Architecturally this is `capstone.py` grown up: the
+e-graph lives outside the compiler, and translation in/out is the tax.
+
+**Making the e-graph *be* the IR: the `eqsat` dialect.** The other line, from
+Tobias Grosser's group, inverts that: represent the e-graph *natively in MLIR*
+as an `eqsat.eclass` op whose operands are the equivalent alternatives —
+first as a rewriting dialect ([EGRAPHS 2025](https://arxiv.org/abs/2505.09363),
+prototyped in [xDSL](https://xdsl.dev/)), then generalized so the e-graph
+*persists across the whole pass pipeline* instead of being discarded after one
+optimization ([arXiv 2602.16707](https://arxiv.org/abs/2602.16707), Feb 2026).
+No translation tax, and ordinary passes like CSE double as e-graph maintenance.
+
+### Final thoughts
+
+Two things make this chapter's toy honest. First, the architecture you just ran
+— *lift a pure expression fragment, saturate outside the main IR, extract,
+re-emit* — is not a pedagogical simplification; it is the state of practice,
+the same shape as DialEgg and every egglog-based pipeline. The reason nothing
+is upstream yet isn't doubt about the idea, it's the unsolved edges: real IR
+has memory, side effects, and control flow that don't fit pure term graphs
+(MLIR regions bind values — active research on "slotted" e-graphs), saturation
+can blow up exponentially, and optimal extraction is NP-hard. Cranelift shipped
+by *constraining* the e-graph; the MLIR efforts are still choosing between
+bridging out (DialEgg) and building in (`eqsat`).
+
+Second, the trend line is clear: destructive rewriting is increasingly seen as
+the legacy design, and "equalities as first-class IR" as the destination. If
+that lands, the skills from this chapter — thinking in e-classes, writing
+rules instead of passes, pricing operations with a cost model — stop being a
+side quest and become how mid-end optimization is simply *done*. Watch the
+`eqsat` dialect: an e-graph that survives the entire pipeline would dissolve
+the boundary between "optimize the algebra first" (this chapter) and "then
+lower it" (the rest of this series).
+
+**Next:** [`../7_transformer/`](../7_transformer/) — transformers.
 

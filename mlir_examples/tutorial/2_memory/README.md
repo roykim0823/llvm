@@ -942,4 +942,4 @@ shows the pattern for removing them.
 - `llvm.emit_c_interface` is what makes any of this callable from C/Python.
 - The `vector` dialect is how you get SIMD without writing intrinsics.
 
-**Next:** Part 3 — the Affine dialect and OpenMP (see [`../reference/`](../reference/)).
+**Next:** [`../3_parallel/`](../3_parallel/) — the Affine dialect and OpenMP.

@@ -706,7 +706,7 @@ intermediate `tensor.empty` for `t`. `build.sh` writes this to
 ```mlir
 #map = affine_map<(d0) -> (d0)>
 module {
-  func.func @addmul(%arg0: tensor<10xf32>, %arg1: tensor<10xf32>, %arg2: tensor<10xf32>) -> tensor<10xf32> {
+  func.func @addmul(%arg0: tensor<10xf32>, %arg1: tensor<10xf32>, %arg2: tensor<10xf32>) -> tensor<10xf32> attributes {llvm.emit_c_interface} {
     %0 = tensor.empty() : tensor<10xf32>
     %1 = linalg.generic {indexing_maps = [#map, #map, #map, #map], iterator_types = ["parallel"]} ins(%arg0, %arg1, %arg2 : tensor<10xf32>, tensor<10xf32>, tensor<10xf32>) outs(%0 : tensor<10xf32>) {
     ^bb0(%in: f32, %in_0: f32, %in_1: f32, %out: f32):
@@ -925,5 +925,4 @@ the inspected `build/*.mlir`) into a local `build/` directory.
   compiler fuse elementwise chains into one loop and tile contractions for cache —
   exactly the transforms that matter for ML and GPU code.
 
-**Next:** Part 5 — Neural networks and tensors (see [`../reference/`](../reference/)).
-```
+**Next:** [`../5_neural_network/`](../5_neural_network/) — neural networks and tensors.

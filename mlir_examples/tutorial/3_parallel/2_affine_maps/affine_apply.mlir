@@ -13,7 +13,6 @@
 //   mlir-opt affine_apply.mlir -canonicalize   # constant maps fold away
 
 // Reusable named maps (the `#name` attribute-alias sigil from Chapter 1):
-// Define some resuable affine maps
 #tile_map    = affine_map<(d0) -> (d0 floordiv 32)>          // which 32-wide tile?
 #offset_map  = affine_map<(d0)[s0] -> (d0 + s0)>            // shift by a symbol
 #complex_map = affine_map<(d0, d1)[s0] -> (d0 * 2 + d1 floordiv 4 + s0)>

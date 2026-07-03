@@ -14,7 +14,7 @@
 #include <stdio.h>
 #include <omp.h>
 
-int kernel(float *input, float *output) {
+void kernel(float *input, float *output) {
 #pragma omp parallel
   {
 #pragma omp for

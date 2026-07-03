@@ -206,10 +206,65 @@ func.func @dense_relu(%X: memref<?x?xf32>, %W: memref<?x?xf32>,
 }
 ```
 
-The bias's indexing map `(i, j) -> (j)` is the broadcast: for every row `i` the
-same `b[j]` is read, stretching the length-`M` bias across all `N` rows exactly
-like Chapter 4's `linalg.broadcast` — but here folded straight into the activation
-loop. `aot_main.py` feeds in NumPy `X`, `W`, `b` and checks the output against
+### Reading the kernel, line by line
+
+**The signature — dynamic shapes, no return value.** `memref<?x?xf32>` is a
+rank-2 buffer of `f32` whose sizes are *dynamic* (`?`): one compiled kernel
+serves any `N`, `K`, `M`, because the actual sizes travel at runtime inside each
+memref descriptor. The function returns nothing — this is **destination-passing
+style**: the caller allocates `%out` and the kernel writes into it. That matters
+because `linalg.matmul` *accumulates* (`out[i,j] += Σₖ X[i,k]·W[k,j]`), which is
+why `aot_main.py` hands in an `np.zeros` buffer. The
+`llvm.emit_c_interface` attribute makes the lowering emit an extra
+`_mlir_ciface_dense_relu` wrapper that takes each descriptor by pointer — the
+exact symbol the Python driver loads with `ctypes`.
+
+**Anatomy of the `linalg.generic`.** A generic op is three lists bound together
+**positionally** — operands, indexing maps, and block arguments all line up in
+the order *all `ins` first, then all `outs`*:
+
+1. **The iteration space.** `iterator_types = ["parallel", "parallel"]` declares
+   a 2-D loop nest over `(i, j)` — the `N×M` index space of the output. Every
+   point is independent (`parallel`), so there is no loop-carried state.
+2. **One indexing map per operand.** The 1st map `(i, j) -> (j)` belongs to the
+   1st operand `%b`; the 2nd map `(i, j) -> (i, j)` belongs to `%out`. Each map
+   answers: *at iteration point `(i, j)`, which element of this operand do I
+   touch?*
+3. **One block argument per operand.** `^bb0(%bias: f32, %acc: f32)` receives
+   the *scalar elements* selected by those maps — `%bias = b[j]`,
+   `%acc = out[i, j]`. Note that the `outs` argument is **readable**: `%acc`
+   carries the value the matmul just stored there, which is how this generic
+   *continues* the computation in place instead of overwriting it. Finally,
+   `linalg.yield %relu` stores the body's result back through `%out`'s map.
+
+Put together, the generic is exactly this loop nest:
+
+```text
+for i in 0..N:                # "parallel"
+  for j in 0..M:              # "parallel"
+    bias = b[j]               # ins  %b   via (i,j) -> (j)   → %bias
+    acc  = out[i, j]          # outs %out via (i,j) -> (i,j) → %acc  (the matmul result)
+    out[i, j] = max(acc + bias, 0.0)      # body + linalg.yield
+```
+
+(The names `%bias`/`%acc` are documentation only — round-trip the file through
+`mlir-opt` and they become `%arg0`/`%arg1`; the binding is purely positional.)
+
+**The broadcast.** The bias's map `(i, j) -> (j)` *is* the broadcast: the map
+ignores `i`, so every row reads the same `b[j]`, stretching the length-`M` bias
+across all `N` rows exactly like Chapter 4's `linalg.broadcast` — but here folded
+straight into the activation loop.
+
+**Why the matmul stays a separate op.** Bias-add and ReLU fuse for free because
+they share the generic's `(i, j)` iteration space. The matmul does not: its
+space is `(i, j, k)` with `k` a *reduction* iterator, so merging it with an
+elementwise epilogue changes the loop structure — a genuine transformation that
+tiling/fusion passes perform later in the pipeline, not something you write by
+hand.
+
+`build.sh` lowers this file with `mlir-opt` (`linalg → scf` loops `→ llvm`),
+translates it to LLVM IR, compiles it to a shared library, and runs
+`aot_main.py`, which feeds in NumPy `X`, `W`, `b` and checks the output against
 `np.maximum(X @ W + b, 0)`.
 
 **Run:** `cd mlir_layer && bash build.sh`
@@ -233,7 +288,8 @@ the GPU.
 ├── tinynn/            # the pure-Python library (the PDF's content)
 │   ├── engine.py      #   Value: reverse-mode autodiff
 │   ├── nn.py          #   Module / Neuron / Layer / MLP
-│   └── optim.py       #   SGD (+ L2 weight decay)
+│   ├── optim.py       #   SGD (+ L2 weight decay)
+│   └── __init__.py    #   re-exports Value / MLP / SGD
 ├── train_demo.py      # train on synthetic two-moons (NumPy only)
 ├── mlir_layer/        # the MLIR bridge: a dense layer in linalg
 │   ├── dense_relu.mlir
@@ -245,11 +301,13 @@ the GPU.
 ## Run everything
 
 ```bash
-export PATH="/opt/homebrew/opt/llvm@20/bin:$PATH"
-# pip install numpy
+# One-time setup, if your environment isn't ready yet (run from the repo root):
+#   export PATH="/opt/homebrew/opt/llvm@20/bin:$PATH"   # Homebrew LLVM 20 tools
+#   uv sync                                             # install Python deps (NumPy)
+#   source .venv/bin/activate                           # activate the venv
 
 python3 train_demo.py                 # Part A — train the Python MLP
-( cd mlir_layer && bash build.sh )    # Part B — run the compiled layer
+( cd mlir_layer && bash build.sh )    # Part B — compile & run the MLIR layer
 ```
 
 ## Key takeaways
@@ -265,6 +323,5 @@ python3 train_demo.py                 # Part A — train the Python MLP
 - **The scalar Python version is slow on purpose** — it motivates compiling the
   graph, which is what Chapters 6-8 do.
 
-**Next:** Part 6 — e-graphs and term rewriting (see [`../reference/`](../reference/)).
-```
+**Next:** [`../6_egraph/`](../6_egraph/) — e-graphs and term rewriting.
 

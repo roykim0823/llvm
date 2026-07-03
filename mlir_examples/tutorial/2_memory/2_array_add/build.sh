@@ -21,12 +21,13 @@ mlir-translate ./build/array_add_opt.mlir \
 -mlir-to-llvmir \
 -o ./build/array_add.ll
 
-llc -filetype=obj ./build/array_add.ll -o ./build/array_add.o
+llc -filetype=obj --relocation-model=pic ./build/array_add.ll -o ./build/array_add.o
 clang -shared -fPIC ./build/array_add.o -o ./build/libarray_add.dylib
 
 echo "python aot_main.py"
 python aot_main.py
 
-# 2. JIT execution, no use any intermediate files in build directory.
+# JIT execution: no intermediate files needed — jit_main.py lowers and runs
+# array_add.mlir entirely at runtime.
 echo "python jit_main.py"
 python jit_main.py

@@ -24,7 +24,7 @@ softmax.
 
 ---
 
-## Part A — GPT-2 in NumPy (`gpt2/model.py`)
+## Part A — GPT-2 in NumPy (`gpt2/model.py`) · ✅
 
 The full forward pass, every function mapping to ops you already know:
 
@@ -104,10 +104,13 @@ between them:
 out[i,j] = exp(x[i,j] - max_j x[i,:]) / Σ_j exp(x[i,:] - max_j x[i,:])
 ```
 
-`softmax.mlir` implements it with three sequential `scf.for` passes per row — a
-`maximumf` accumulator (the row max, subtracted for numerical stability), then an
-`addf` accumulator over `math.exp`, then a divide — the same stable formula as the
-NumPy `softmax` above, lowered to native code:
+Look at the data flow and you'll see why one loop can't do it: every `exp` needs
+the row **max** (know it only after seeing the whole row), and every divide needs
+the row **sum** (known only after all the `exp`s). The dependencies force
+*sequential passes over the same row* — which is exactly what `softmax.mlir`
+writes down: per row, a `maximumf` accumulator (the row max, subtracted for
+numerical stability), then an `addf` accumulator over `math.exp`, then a divide —
+the same stable formula as the NumPy `softmax` above, lowered to native code:
 
 *mlir_attention/softmax.mlir*
 ```mlir
@@ -147,9 +150,108 @@ func.func @softmax(%x: memref<?x?xf32>, %out: memref<?x?xf32>)
 }
 ```
 
-The two `iter_args` accumulators are Chapter 3's loop-carried values again (the
-`maximumf`/`addf` reductions), and `math.exp` lowers to a libm call. The driver
-checks it against the model's own `softmax` and confirms every row sums to 1.
+### Reading the kernel, line by line
+
+**The signature — dynamic shapes, destination-passing style.** As in Chapter 5,
+`memref<?x?xf32>` is a rank-2 buffer of `f32` whose sizes are *dynamic* (`?`):
+one compiled kernel serves any score matrix, because the actual sizes travel at
+runtime inside each memref descriptor. The function returns nothing — the caller
+allocates `%out` and the kernel writes into it (which is why `aot_main.py` passes
+an `np.zeros_like(x)` buffer). And `llvm.emit_c_interface` makes the lowering
+emit a `_mlir_ciface_softmax` wrapper taking each descriptor *by pointer* — the
+exact symbol the Python driver loads with `ctypes`.
+
+**The sizes come from the memref itself.** `memref.dim %x, %c0` reads the
+runtime extent of dimension 0 out of the descriptor — no separate `N`/`M`
+arguments needed. Note the types: dimensions and loop bounds are `index` (the
+target's native size type), while the data is `f32`; that's why the constants
+`%c0`/`%c1` are `index` but `%ninf`/`%zero` are `f32`.
+
+**`scf.for` + `iter_args` — a loop that computes a value.** SSA values are
+immutable, so you can't write `m = max(m, v)` into a loop the way NumPy mutates
+an accumulator. Instead `scf.for` carries state *functionally*:
+
+```mlir
+%mx = scf.for %j = %c0 to %M step %c1 iter_args(%m = %ninf) -> (f32) {
+```
+
+reads as: the loop carries one `f32` value, `%m` starts at `%ninf`, each
+iteration must `scf.yield` its updated value (which becomes next iteration's
+`%m`), and after the last iteration the loop itself *evaluates to* the final
+value, bound to `%mx`. That is a **reduction** written as a pure dataflow loop —
+the same loop-carried-value machinery as Chapter 3, here doing `max` instead of
+`+`.
+
+**Why `-FLT_MAX` and `0.0`?** Every reduction needs an *identity* to start from —
+a value that doesn't affect the result. For `addf` it's `0.0`; for `maximumf`
+it's the smallest float, `-3.40282347E+38` (`-FLT_MAX`), so the first real
+element always wins the comparison.
+
+**Pass 2 does double duty.** The second loop computes `exp(x[i,j] - %mx)`,
+**stores** it into `%out` *and* accumulates the row sum in the same traversal —
+so pass 3 can just re-load the stored `exp` values and divide, never calling
+`math.exp` twice for the same element. Notice `%mx` is simply *used* inside the
+second loop: values defined earlier in the enclosing region are in scope, no
+plumbing required. Pass 3 carries no `iter_args` at all — it's a pure
+side-effect loop (load, divide, store).
+
+De-sugared, the whole kernel is exactly the NumPy `softmax` as explicit loops:
+
+```text
+for i in 0..N:                             # rows are independent
+  m = -FLT_MAX
+  for j in 0..M:  m = max(m, x[i,j])       # pass 1 → %mx   (np.max(x, axis=-1))
+  s = 0.0
+  for j in 0..M:                           # pass 2 → %sum
+    e = exp(x[i,j] - m)                    #   (np.exp(x - max))
+    out[i,j] = e;  s += e                  #   (np.sum(ex, axis=-1))
+  for j in 0..M:  out[i,j] /= s            # pass 3        (ex / sum)
+```
+
+**Four dialects, one function.** The kernel mixes `scf` (structured control
+flow), `arith` (scalar arithmetic), `math` (transcendentals), and `memref`
+(loads/stores/dims) — MLIR ops compose freely across dialects. `math.exp` has no
+LLVM instruction to lower to; it becomes a call to libm's `expf`, which is why
+the build step below needs nothing special — `clang` links libm by default.
+
+> *Aside:* the max and sum passes **can** be fused into one, using a rescaling
+> trick ("online softmax") — that's the core idea behind FlashAttention. Our
+> three-pass version is the clear, textbook form.
+
+### From `.mlir` to a shared library (`build.sh`)
+
+The build is the same recipe as Chapter 5, with one addition for `math`. The
+pipeline, annotated (the runnable script is `build.sh`):
+
+```text
+mlir-opt softmax.mlir
+  -convert-scf-to-cf              structured loops → branch-based CFG blocks
+  -convert-cf-to-llvm
+  -convert-math-to-llvm           math.exp → libm `expf` call
+  -convert-arith-to-llvm
+  -convert-index-to-llvm
+  -finalize-memref-to-llvm        memref → the descriptor struct (ptr, offset, sizes, strides)
+  -convert-func-to-llvm           + emits _mlir_ciface_softmax (llvm.emit_c_interface)
+  -reconcile-unrealized-casts
+mlir-translate -mlir-to-llvmir    LLVM dialect → real LLVM IR (.ll)
+llc -filetype=obj                 LLVM IR → native object file
+clang -shared                     → libsoftmax.dylib
+```
+
+(`build.sh` additionally passes `--relocation-model=pic` to `llc` and `-fPIC`
+to `clang` — position-independent code, required for a shared library.)
+
+Each `-convert-*` pass rewrites one dialect into the `llvm` dialect;
+`reconcile-unrealized-casts` then cleans up the temporary casts the partial
+conversions leave between not-yet-converted types. After that the module is pure
+`llvm` dialect, and the rest is the ordinary LLVM toolchain from Chapter 1.
+
+The driver (`aot_main.py`) loads the dylib, builds a `MemRef2D` descriptor
+around each NumPy array's *existing* buffer (zero-copy — the struct just points
+at NumPy's data with the right sizes and strides), and calls
+`_mlir_ciface_softmax`. It then checks the result against the **model's own**
+`softmax` from `gpt2/model.py` — the same function the transformer in Part A
+runs — and confirms every row sums to 1.
 
 **Run:** `cd mlir_attention && bash build.sh`
 
@@ -192,12 +294,11 @@ python3 demo.py                          # Part A — the model
   softmax.
 - **Self-attention** = `softmax(QKᵀ/√d + mask) · V`: project to Q/K/V, score,
   mask the future, softmax, weight the Values; run it in parallel **heads**.
-- **Softmax is the interesting op to compile** because of its per-row reductions;
-  `math.exp` + `scf.for` reductions (with `iter_args`, Ch 3) reproduce the stable
-  formula exactly.
+- **Softmax is the interesting op to compile** because its data dependencies
+  (every `exp` needs the row max, every divide needs the row sum) force
+  sequential passes; `scf.for` + `iter_args` (Ch 3) express those reductions as
+  pure dataflow loops, and `math.exp` lowers to a libm call.
 - **The model is a compiler workload.** Frameworks lower exactly this graph to
   `linalg`/`tensor` and optimize it — and the next chapter moves it to the GPU.
 
-**Next:** Part 8 — GPU compilation with MLIR (see [`../reference/`](../reference/)).
-```
-
+**Next:** [`../8_gpu/`](../8_gpu/) — GPU compilation with MLIR.
