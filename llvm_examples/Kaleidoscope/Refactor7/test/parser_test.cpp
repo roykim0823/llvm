@@ -105,7 +105,9 @@ INSTANTIATE_TEST_SUITE_P(UnaryTests, ParseUnaryExprTest, ::testing::Values(
     ParserTestCase{"NestedUnary", "!!x", true},
     ParserTestCase{"UnaryPrimary", "42", true},
     ParserTestCase{"UnaryWithParens", "!(x + y)", true},
-    ParserTestCase{"UnaryComplex", "!!(x < y)", true}
+    ParserTestCase{"UnaryComplex", "!!(x < y)", true},
+    ParserTestCase{"UnaryMissingOperand", "!", false},   // operator with nothing to apply to
+    ParserTestCase{"UnaryDanglingParen", "!(x", false}   // operand fails to parse
 ), [](const auto& info) { return info.param.testName; });
 
 // --- 5. Full Binary Expressions ---
@@ -125,6 +127,8 @@ INSTANTIATE_TEST_SUITE_P(ExpressionTests, ParseExpressionTest, ::testing::Values
     ParserTestCase{"PrecedenceMix", "a * b + c * d", true},
     ParserTestCase{"Associativity", "a - b - c", true},
     ParserTestCase{"Comparison", "x < y", true},
+    ParserTestCase{"Assignment", "x = 1", true},          // '=' is a binop with precedence 2
+    ParserTestCase{"AssignmentOfExpr", "x = y + 1", true},
     ParserTestCase{"TrailingOperator", "10 +", false},
     ParserTestCase{"LeadingOperator", "+ 10", true},  // false -> true, due to Unary Op, UnaryExprAST('+', NumberExprAST(10))
     ParserTestCase{"DoubleOperator", "10 ++ 5", true}  // false -> true, due to Unary Op,
@@ -150,8 +154,9 @@ INSTANTIATE_TEST_SUITE_P(PrototypeTests, ParsePrototypeTest, ::testing::Values(
     ParserTestCase{"UnaryProto", "unary!(v)", true},
     ParserTestCase{"BinaryProto", "binary@(v1 v2)", true},
     ParserTestCase{"BinaryWithPrecProto", "binary@ 10 (v1 v2)", true},
-    ParserTestCase{"BinaryInvalidPrec", "binary@(200 v1 v2)", false},
-    ParserTestCase{"BinaryMissingArg", "binary@(10 v1)", false},
+    ParserTestCase{"BinaryInvalidPrec", "binary@ 200 (v1 v2)", false},  // reaches the 1..100 precedence validation
+    ParserTestCase{"BinaryMissingArg", "binary@ 10 (v1)", false},        // reaches the operand-count validation
+    ParserTestCase{"BinaryPrecInsideParens", "binary@(200 v1 v2)", false}, // syntax error: precedence belongs before '('
     ParserTestCase{"UnaryMissingArg", "unary!()", false}
 ), [](const auto& info) { return info.param.testName; });
 
@@ -339,7 +344,19 @@ INSTANTIATE_TEST_SUITE_P(
     JITTestCase{"ForLoopExecution",
     // This loop starts at 1, runs while i < 4 (so i=1, 2, 3),
     // The for loop expression itself evaluates to 0.0 according to the tutorial specs.
-      "for i = 1.0, i < 4.0, 1.0 in i * 2.0", 0.0}
+      "for i = 1.0, i < 4.0, 1.0 in i * 2.0", 0.0},
+
+    // Chapter 7: mutable variables. 'var/in' scoping and '=' assignment.
+    JITTestCase{"VarSimple", "var a = 5.0 in a", 5.0},
+    JITTestCase{"VarMultiple", "var a = 1.0, b = 2.0 in a + b", 3.0},
+    JITTestCase{"VarDefaultInit", "var a in a + 1.0", 1.0},  // uninitialized vars default to 0.0
+    JITTestCase{"AssignReturnsValue", "var x = 0.0 in (x = 42.0)", 42.0},
+    JITTestCase{"AssignThenRead", "var a = 1.0 in (a = a + 2.0) + a", 6.0},  // a becomes 3.0, then 3.0 + 3.0
+    JITTestCase{"ForBodyMutation",
+    // Kaleidoscope's for-loop evaluates the end condition AFTER the body, using
+    // the pre-increment value, so the body runs for j = 1, 2 AND 3:
+    // i accumulates 1 + 2 + 3 = 6, and the for expression itself contributes 0.0.
+      "var i = 0.0 in ((for j = 1.0, j < 3.0 in (i = i + j)) + i)", 6.0}
   ),
   [](const auto& info) { return info.param.testName; }
 );

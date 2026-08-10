@@ -14,6 +14,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
 
+#include <cassert>
 #include <memory>
 #include <string>
 #include <utility>

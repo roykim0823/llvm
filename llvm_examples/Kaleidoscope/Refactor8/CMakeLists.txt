@@ -18,32 +18,31 @@ include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
 # 3. Map the components to libraries
-# The 'core' in your command corresponds to the LLVMCore component
 llvm_map_components_to_libnames(llvm_libs core orcjit native)
 
-# Define source files with their new paths
-set(SOURCES
-    src/main.cpp
+# Shared core library so toy and the test binaries compile each source once.
+# extern_d.cpp stays out of the archive: unreferenced archive members are
+# dropped at link time, but the JIT needs putchard/printd in the process image,
+# so it is listed directly in each executable's sources instead.
+add_library(toy_core STATIC
     src/lexer.cpp
     src/parser.cpp
     src/codegen.cpp
     src/log.cpp
-    src/extern_d.cpp
 )
+target_include_directories(toy_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(toy_core PUBLIC ${llvm_libs})
 
-add_executable(toy ${SOURCES})
-
-# This is the magic line: it adds 'include/' to the header search path
-target_include_directories(toy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(toy PRIVATE ${llvm_libs})
+add_executable(toy src/main.cpp src/extern_d.cpp)
+target_link_libraries(toy PRIVATE toy_core)
 
 # Unit tests
-# T1: Fetch and Enable GoogleTest
+# T1: Fetch and Enable GoogleTest (pinned release, not a moving branch)
 include(FetchContent)
 FetchContent_Declare(
   googletest
-  URL https://github.com/google/googletest/archive/refs/heads/main.zip
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE  # Add this line
+  URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
 # T2: Add test executable
@@ -51,26 +50,26 @@ FetchContent_MakeAvailable(googletest)
 
 enable_testing()
 
-add_executable(lexer_test
-    test/lexer_test.cpp src/lexer.cpp src/log.cpp
-)
-target_include_directories(lexer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(lexer_test PRIVATE gtest_main ${llvm_libs})
+add_executable(lexer_test test/lexer_test.cpp)
+target_link_libraries(lexer_test PRIVATE gtest_main toy_core)
 
-add_executable(parser_test
-    test/parser_test.cpp src/parser.cpp src/lexer.cpp src/log.cpp src/codegen.cpp
-)
-target_include_directories(parser_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(parser_test PRIVATE gtest_main ${llvm_libs})
+add_executable(parser_test test/parser_test.cpp src/extern_d.cpp)
+target_link_libraries(parser_test PRIVATE gtest_main toy_core)
 
-add_executable(codegen_test
-    test/codegen_test.cpp src/codegen.cpp src/parser.cpp src/lexer.cpp src/log.cpp
-)
-target_include_directories(codegen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(codegen_test PRIVATE gtest_main ${llvm_libs})
+add_executable(codegen_test test/codegen_test.cpp src/extern_d.cpp)
+target_link_libraries(codegen_test PRIVATE gtest_main toy_core)
 
 # Discover tests automatically
 include(GoogleTest)
 gtest_discover_tests(lexer_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(parser_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(codegen_test PROPERTIES NO_PRETTY_VALUES TRUE)
+
+# lit + FileCheck tests (end-to-end: feed a .k file to toy, check the printed IR)
+find_program(LIT_TOOL NAMES lit llvm-lit)
+if(LIT_TOOL)
+  add_test(NAME filecheck
+           COMMAND ${LIT_TOOL} -v ${CMAKE_CURRENT_SOURCE_DIR}/test/filecheck)
+  set_tests_properties(filecheck PROPERTIES
+    ENVIRONMENT "TOY_BIN=$<TARGET_FILE:toy>;LIT_EXEC_ROOT=${CMAKE_CURRENT_BINARY_DIR}/lit")
+endif()

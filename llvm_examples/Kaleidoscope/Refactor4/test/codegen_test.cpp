@@ -52,8 +52,18 @@ TEST_F(CodegenTest, CallExprGen) {
     EXPECT_TRUE(llvm::isa<llvm::CallInst>(V));
 }
 
+TEST_F(CodegenTest, CallExprUnknownFunction) {
+    // No prototype registered in this context: hits the "Unknown function referenced" path
+    auto call = std::make_unique<CallExprAST>("calleeFunc", std::vector<std::unique_ptr<ExprAST>>());
+    EXPECT_EQ(call->codegen(*ctx), nullptr);
+}
+
 TEST_F(CodegenTest, CallExprArgumentMismatch) {
-    // Callee expects 1 arg, we give 0
+    // Callee expects 1 arg, we give 0: hits the "Incorrect # arguments passed" path
+    std::vector<std::string> argNames = {"a"};
+    auto proto = std::make_unique<PrototypeAST>("calleeFunc", std::move(argNames));
+    ASSERT_NE(proto->codegen(*ctx), nullptr);
+
     auto call = std::make_unique<CallExprAST>("calleeFunc", std::vector<std::unique_ptr<ExprAST>>());
     EXPECT_EQ(call->codegen(*ctx), nullptr);
 }
@@ -86,7 +96,8 @@ TEST_F(CodegenTest, FunctionGen) {
 struct BinaryOpParam {
     char op;
     std::string expectedInstr;
-    std::string expectedResult; // Optional: for verifying constant folding results
+    bool valid;          // false: codegen must fail and return nullptr
+    double expectedFold; // expected result of constant-folding "1.0 <op> 2.0"
 };
 
 class BinaryOpTest : public CodegenTest, public ::testing::WithParamInterface<BinaryOpParam> {};
@@ -115,6 +126,13 @@ TEST_P(BinaryOpTest, GeneratedIRInst) {
     // 4. Generate IR
     llvm::Value *V = expr->codegen(*ctx);
 
+    if (!params.valid) {
+        // Invalid operator: codegen must fail cleanly
+        EXPECT_EQ(V, nullptr);
+        return;
+    }
+    ASSERT_NE(V, nullptr);
+
     // 5. FIX: Stringify the entire Basic Block to see all generated instructions
     std::string bbStr;
     llvm::raw_string_ostream os(bbStr);
@@ -132,141 +150,37 @@ TEST_P(BinaryOpTest, BinaryOpResult) {
 
     llvm::Value *V = expr->codegen(*ctx);
 
-    // Verify the Binary Expression is correctly folded to the expected result by constant folding
-    // (e.g., "3.0" for addition, "-1.0" for subtraction)
-    if (params.expectedResult.empty()) {
-        // If no expected result is provided, we just check that codegen succeeded
+    if (!params.valid) {
+        // Invalid operator: codegen must fail cleanly
         EXPECT_EQ(V, nullptr);
-    } else {
-        // For comparison, we check if the generated IR contains the expected constant value
-        EXPECT_TRUE(IRToString(V).find(params.expectedResult) != std::string::npos)
-            << "Expected result '" << params.expectedResult << "' not found in IR: " << IRToString(V);
+        return;
     }
+    ASSERT_NE(V, nullptr);
+
+    // "1.0 <op> 2.0" is constant-folded by IRBuilder; check the folded value
+    // itself instead of substring-matching LLVM's textual float format.
+    auto *CF = llvm::dyn_cast<llvm::ConstantFP>(V);
+    ASSERT_NE(CF, nullptr) << "expected a folded constant, got: " << IRToString(V);
+    EXPECT_DOUBLE_EQ(CF->getValueAPF().convertToDouble(), params.expectedFold);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     OperatorTests,
     BinaryOpTest,
     ::testing::Values(
-        BinaryOpParam{'+', "fadd", "3.0"},
-        BinaryOpParam{'-', "fsub", "-1.0"},
-        BinaryOpParam{'*', "fmul", "2.0"},
-        BinaryOpParam{'<', "fcmp", "0"}, // Result of '<' uses fcmp then uitofp
-        BinaryOpParam{'?', "", ""} // Invalid operator, should fail codegen and return nullptr
+        BinaryOpParam{'+', "fadd", true, 3.0},
+        BinaryOpParam{'-', "fsub", true, -1.0},
+        BinaryOpParam{'*', "fmul", true, 2.0},
+        BinaryOpParam{'<', "fcmp", true, 1.0}, // 1.0 < 2.0 folds to 1.0 (true); uses fcmp then uitofp
+        BinaryOpParam{'?', "", false, 0.0}     // Invalid operator, must fail codegen and return nullptr
     )
 );
 
 //-----------------------------------------------------------------------------
-// Optimization Pass Tests: These tests will build specific ASTs that should trigger 
-// certain optimizations (like reassociation and common subexpression elimination),
-// generate IR, and verify that the
-// expected optimizations are present in the generated IR.
-
-class OptimizationPassTest : public CodegenTest {};
-
-// Helper lambdas for cleaner AST construction in tests
-static auto num = [](double v) { return std::make_unique<NumberExprAST>(v); };
-static auto var = [](const std::string& name) { return std::make_unique<VariableExprAST>(name); };
-static auto add = [](std::unique_ptr<ExprAST> lhs, std::unique_ptr<ExprAST> rhs) {
-    return std::make_unique<BinaryExprAST>('+', std::move(lhs), std::move(rhs));
-};
-static auto mul = [](std::unique_ptr<ExprAST> lhs, std::unique_ptr<ExprAST> rhs) {
-    return std::make_unique<BinaryExprAST>('*', std::move(lhs), std::move(rhs));
-};
-
-TEST_F(OptimizationPassTest, ReassociatePass) {
-    // Test: (x+5) * (5+x) -> Reassociate & InstCombine should each one addtmp
-    std::vector<std::string> args = {"x"};
-    auto proto = std::make_unique<PrototypeAST>("test_reassoc", std::move(args));
-    
-    auto body = add(add(var("x"), num(5.0)), add(num(5.0), var("x"))); // (x+5) + (5+x)
-    auto function = std::make_unique<FunctionAST>(std::move(proto), std::move(body));
-
-    llvm::Function *F = function->codegen(*ctx);
-    ASSERT_NE(F, nullptr);
-
-    std::string irStr = IRToString(F);
-
-    // Count the number of fmul instructions. There should be exactly one.
-    size_t faddCount = 0;
-    size_t pos = irStr.find("fadd");
-    while (pos != std::string::npos) {
-        faddCount++;
-        pos = irStr.find("fadd", pos + 4);
-    }
-    
-    EXPECT_EQ(faddCount, 2) 
-        << "ReassociatePass failed to eliminate the common subexpression. Expected 1 fadd, found " 
-        << faddCount << ".\n" << irStr;
-}
-
-TEST_F(OptimizationPassTest, CommonSubexpressionElimination) {
-    // Test: (x * y) + (x * y) -> GVN should eliminate the redundant multiplication
-    std::vector<std::string> args = {"x", "y"};
-    auto proto = std::make_unique<PrototypeAST>("test_cse", std::move(args));
-    
-    auto body = add(mul(var("x"), var("y")), mul(var("x"), var("y")));
-    auto function = std::make_unique<FunctionAST>(std::move(proto), std::move(body));
-
-    llvm::Function *F = function->codegen(*ctx);
-    ASSERT_NE(F, nullptr);
-
-    std::string irStr = IRToString(F);
-
-    // Count the number of fmul instructions. There should be exactly one.
-    size_t fmulCount = 0;
-    size_t pos = irStr.find("fmul");
-    while (pos != std::string::npos) {
-        fmulCount++;
-        pos = irStr.find("fmul", pos + 4);
-    }
-    
-    EXPECT_EQ(fmulCount, 1) 
-        << "GVN failed to eliminate the common subexpression. Expected 1 fmul, found " 
-        << fmulCount << ".\n" << irStr;
-}
-
-TEST_F(OptimizationPassTest, ReassociateAndCSECombined) {
-    // Test: (1.0 + 2.0 + x) + (x + (1.0 + 2.0))
-    // Expected optimization path:
-    // 1. InstCombine: (3.0 + x) + (x + 3.0)
-    // 2. Reassociate: (x + 3.0) + (x + 3.0) -> addtmp = x + 3.0; addtmp + addtmp    
-    std::vector<std::string> args = {"x"};
-    auto proto = std::make_unique<PrototypeAST>("test_combined", std::move(args));
-    
-    // Construct LHS: (1.0 + 2.0) + x
-    auto lhs = add(add(num(1.0), num(2.0)), var("x"));
-    // Construct RHS: x + (1.0 + 2.0)
-    auto rhs = add(var("x"), add(num(1.0), num(2.0)));
-    // Outer expression
-    auto body = add(std::move(lhs), std::move(rhs));
-    
-    auto function = std::make_unique<FunctionAST>(std::move(proto), std::move(body));
-
-    llvm::Function *F = function->codegen(*ctx);
-    ASSERT_NE(F, nullptr);
-
-    std::string irStr = IRToString(F);
-
-    // 1. Verify the constants folded entirely into 6.0
-    EXPECT_TRUE(irStr.find("3.0") != std::string::npos) 
-        << "Expected fully folded constant 3.0 in IR:\n" << irStr;
-
-    // 2. Count total arithmetic instructions (should be heavily reduced)
-    size_t faddCount = 0;
-    size_t pos = irStr.find("fadd");
-    while (pos != std::string::npos) { faddCount++; pos = irStr.find("fadd", pos + 4); }
-
-    size_t fmulCount = 0;
-    pos = irStr.find("fmul");
-    while (pos != std::string::npos) { fmulCount++; pos = irStr.find("fmul", pos + 4); }
-
-    // Unoptimized this would be 5 additions. 
-    // Optimized, it should be at most 2 instructions: 
-    // either two additions addtmp+addtmp
-    EXPECT_LE(faddCount + fmulCount, 2) 
-        << "Expected 2 or fewer arithmetic instructions after combined optimization.\n" << irStr;
-}
+// Optimization pass behavior (CSE, reassociation, constant folding) is now
+// verified with lit + FileCheck in test/filecheck/opt.k, where instruction
+// counts and def-use structure can be expressed directly (CHECK / CHECK-NEXT /
+// CHECK-NOT) instead of substring-counting loops over the printed IR.
 
 
 TEST_F(CodegenTest, JIT) {

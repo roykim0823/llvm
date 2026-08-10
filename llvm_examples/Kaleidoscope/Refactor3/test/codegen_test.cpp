@@ -52,8 +52,18 @@ TEST_F(CodegenTest, CallExprGen) {
     EXPECT_TRUE(llvm::isa<llvm::CallInst>(V));
 }
 
+TEST_F(CodegenTest, CallExprUnknownFunction) {
+    // No prototype registered in this context: hits the "Unknown function referenced" path
+    auto call = std::make_unique<CallExprAST>("calleeFunc", std::vector<std::unique_ptr<ExprAST>>());
+    EXPECT_EQ(call->codegen(*ctx), nullptr);
+}
+
 TEST_F(CodegenTest, CallExprArgumentMismatch) {
-    // Callee expects 1 arg, we give 0
+    // Callee expects 1 arg, we give 0: hits the "Incorrect # arguments passed" path
+    std::vector<std::string> argNames = {"a"};
+    auto proto = std::make_unique<PrototypeAST>("calleeFunc", std::move(argNames));
+    ASSERT_NE(proto->codegen(*ctx), nullptr);
+
     auto call = std::make_unique<CallExprAST>("calleeFunc", std::vector<std::unique_ptr<ExprAST>>());
     EXPECT_EQ(call->codegen(*ctx), nullptr);
 }
@@ -86,7 +96,8 @@ TEST_F(CodegenTest, FunctionGen) {
 struct BinaryOpParam {
     char op;
     std::string expectedInstr;
-    std::string expectedResult; // Optional: for verifying constant folding results
+    bool valid;          // false: codegen must fail and return nullptr
+    double expectedFold; // expected result of constant-folding "1.0 <op> 2.0"
 };
 
 class BinaryOpTest : public CodegenTest, public ::testing::WithParamInterface<BinaryOpParam> {};
@@ -115,6 +126,13 @@ TEST_P(BinaryOpTest, GeneratedIRInst) {
     // 4. Generate IR
     llvm::Value *V = expr->codegen(*ctx);
 
+    if (!params.valid) {
+        // Invalid operator: codegen must fail cleanly
+        EXPECT_EQ(V, nullptr);
+        return;
+    }
+    ASSERT_NE(V, nullptr);
+
     // 5. FIX: Stringify the entire Basic Block to see all generated instructions
     std::string bbStr;
     llvm::raw_string_ostream os(bbStr);
@@ -132,26 +150,28 @@ TEST_P(BinaryOpTest, BinaryOpResult) {
 
     llvm::Value *V = expr->codegen(*ctx);
 
-    // Verify the Binary Expression is correctly folded to the expected result by constant folding
-    // (e.g., "3.0" for addition, "-1.0" for subtraction)
-    if (params.expectedResult.empty()) {
-        // If no expected result is provided, we just check that codegen succeeded
+    if (!params.valid) {
+        // Invalid operator: codegen must fail cleanly
         EXPECT_EQ(V, nullptr);
-    } else {
-        // For comparison, we check if the generated IR contains the expected constant value
-        EXPECT_TRUE(IRToString(V).find(params.expectedResult) != std::string::npos)
-            << "Expected result '" << params.expectedResult << "' not found in IR: " << IRToString(V);
+        return;
     }
+    ASSERT_NE(V, nullptr);
+
+    // "1.0 <op> 2.0" is constant-folded by IRBuilder; check the folded value
+    // itself instead of substring-matching LLVM's textual float format.
+    auto *CF = llvm::dyn_cast<llvm::ConstantFP>(V);
+    ASSERT_NE(CF, nullptr) << "expected a folded constant, got: " << IRToString(V);
+    EXPECT_DOUBLE_EQ(CF->getValueAPF().convertToDouble(), params.expectedFold);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     OperatorTests,
     BinaryOpTest,
     ::testing::Values(
-        BinaryOpParam{'+', "fadd", "3.0"},
-        BinaryOpParam{'-', "fsub", "-1.0"},
-        BinaryOpParam{'*', "fmul", "2.0"},
-        BinaryOpParam{'<', "fcmp", "0"}, // Result of '<' uses fcmp then uitofp
-        BinaryOpParam{'?', "", ""} // Invalid operator, should fail codegen and return nullptr
+        BinaryOpParam{'+', "fadd", true, 3.0},
+        BinaryOpParam{'-', "fsub", true, -1.0},
+        BinaryOpParam{'*', "fmul", true, 2.0},
+        BinaryOpParam{'<', "fcmp", true, 1.0}, // 1.0 < 2.0 folds to 1.0 (true); uses fcmp then uitofp
+        BinaryOpParam{'?', "", false, 0.0}     // Invalid operator, must fail codegen and return nullptr
     )
 );

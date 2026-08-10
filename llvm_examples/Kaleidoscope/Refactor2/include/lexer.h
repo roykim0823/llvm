@@ -32,7 +32,7 @@ class Lexer {
 
     private:
     std::string identifierStr; // Filled in if tok_identifier
-    double numVal;             // Filled in if tok_number
+    double numVal = 0.0;       // Filled in if tok_number
     int lastChar = ' ';  // Used by gettok
 };
 

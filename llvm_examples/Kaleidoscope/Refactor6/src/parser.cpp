@@ -392,7 +392,6 @@ void Parser::mainLoop() {
         default:      handleTopLevelExpression(); break;
         }
     }
-    // Print out all of the generated code.
-    ctx.theModule->print(llvm::errs(), nullptr);
-
+    // NOTE: unreachable module dump removed -- the loop above only exits via
+    // 'return' on tok_eof, so code after it never ran.
 }

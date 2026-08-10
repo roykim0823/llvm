@@ -320,5 +320,11 @@ llvm::Function *FunctionAST::codegen(IRGenContext &ctx) {
 
   // Error reading body, remove function.
   TheFunction->eraseFromParent();
+
+  // If the body failed, the operator was never really defined; unregister its
+  // precedence so a later use doesn't reach codegen with no function to call.
+  // (matches upstream Chapter6 toy.cpp)
+  if (P.isBinaryOp())
+    ctx.binopPrecedence.erase(P.getOperatorName());
   return nullptr;
 }

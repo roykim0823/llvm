@@ -1,5 +1,5 @@
-#ifndef CODEGEN_CONTEXT_H
-#define CODEGEN_CONTEXT_H
+#ifndef IR_GEN_CTX_H
+#define IR_GEN_CTX_H
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"

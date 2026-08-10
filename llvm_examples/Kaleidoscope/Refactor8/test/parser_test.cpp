@@ -105,7 +105,9 @@ INSTANTIATE_TEST_SUITE_P(UnaryTests, ParseUnaryExprTest, ::testing::Values(
     ParserTestCase{"NestedUnary", "!!x", true},
     ParserTestCase{"UnaryPrimary", "42", true},
     ParserTestCase{"UnaryWithParens", "!(x + y)", true},
-    ParserTestCase{"UnaryComplex", "!!(x < y)", true}
+    ParserTestCase{"UnaryComplex", "!!(x < y)", true},
+    ParserTestCase{"UnaryMissingOperand", "!", false},   // operator with nothing to apply to
+    ParserTestCase{"UnaryDanglingParen", "!(x", false}   // operand fails to parse
 ), [](const auto& info) { return info.param.testName; });
 
 // --- 5. Full Binary Expressions ---
@@ -125,6 +127,8 @@ INSTANTIATE_TEST_SUITE_P(ExpressionTests, ParseExpressionTest, ::testing::Values
     ParserTestCase{"PrecedenceMix", "a * b + c * d", true},
     ParserTestCase{"Associativity", "a - b - c", true},
     ParserTestCase{"Comparison", "x < y", true},
+    ParserTestCase{"Assignment", "x = 1", true},          // '=' is a binop with precedence 2
+    ParserTestCase{"AssignmentOfExpr", "x = y + 1", true},
     ParserTestCase{"TrailingOperator", "10 +", false},
     ParserTestCase{"LeadingOperator", "+ 10", true},  // false -> true, due to Unary Op, UnaryExprAST('+', NumberExprAST(10))
     ParserTestCase{"DoubleOperator", "10 ++ 5", true}  // false -> true, due to Unary Op,
@@ -150,8 +154,9 @@ INSTANTIATE_TEST_SUITE_P(PrototypeTests, ParsePrototypeTest, ::testing::Values(
     ParserTestCase{"UnaryProto", "unary!(v)", true},
     ParserTestCase{"BinaryProto", "binary@(v1 v2)", true},
     ParserTestCase{"BinaryWithPrecProto", "binary@ 10 (v1 v2)", true},
-    ParserTestCase{"BinaryInvalidPrec", "binary@(200 v1 v2)", false},
-    ParserTestCase{"BinaryMissingArg", "binary@(10 v1)", false},
+    ParserTestCase{"BinaryInvalidPrec", "binary@ 200 (v1 v2)", false},  // reaches the 1..100 precedence validation
+    ParserTestCase{"BinaryMissingArg", "binary@ 10 (v1)", false},        // reaches the operand-count validation
+    ParserTestCase{"BinaryPrecInsideParens", "binary@(200 v1 v2)", false}, // syntax error: precedence belongs before '('
     ParserTestCase{"UnaryMissingArg", "unary!()", false}
 ), [](const auto& info) { return info.param.testName; });
 
@@ -241,178 +246,8 @@ INSTANTIATE_TEST_SUITE_P(VarTests, ParseVarExprTest, ::testing::Values(
 ), [](const auto& info) { return info.param.testName; });
 
 // -----------------------------------------------------------------------------
-// JIT Execution Tests: These tests will parse an expression, generate LLVM IR, execute it
-// in the JIT, and verify the runtime result matches the expected value. This will test the full
-// pipeline from parsing to code generation to execution for various expressions.
-
-// 1. Define the parameters for the JIT execution tests
-struct JITTestCase {
-    std::string testName;
-    std::string expression;
-    double expectedResult;
-};
-
-// 2. Create the Parametric Fixture inheriting from CodegenTest
-class JITExecutionParamTest : public ::testing::TestWithParam<JITTestCase> {
-protected:
-    std::unique_ptr<IRGenContext> ctx;
-
-    void SetUp() override {
-        // Initialize a fresh IRGenContext for each test to ensure a clean slate
-        // for code generation and JIT execution
-        ctx = std::make_unique<IRGenContext>();
-
-        // Write the expression to a temporary file and redirect stdin to read from it,
-        // so the parser can read the expression as if it were user input
-        std::ofstream tmpFile("_jit_param_input.txt");
-        tmpFile << GetParam().expression;
-        tmpFile.close();
-        ASSERT_TRUE(freopen("_jit_param_input.txt", "r", stdin) != nullptr);
-    }
-
-    void TearDown() override {
-        // Clean up the temporary file and reset the context to free resources
-        std::remove("_jit_param_input.txt");
-        ctx.reset();
-    }
-};
-
-TEST_P(JITExecutionParamTest, EvaluateExpression) {
-    Lexer lexer;
-    Parser parser(lexer, *ctx);
-
-    // Prime the parser by reading the first token, which is necessary before calling parseTopLevelExpr
-    parser.getNextToken();
-
-    // 1. Parse the expression into an AST
-    auto ast = parser.parseTopLevelExpr();
-    ASSERT_NE(ast, nullptr) << "Failed to parse expression: " << GetParam().expression;
-
-    // 2. Generate LLVM IR from the AST
-    llvm::Function *F = ast->codegen(*ctx);
-    ASSERT_NE(F, nullptr) << "Failed to generate IR for expression: " << GetParam().expression;
-
-    // 3. Execute the generated IR in the JIT and verify the result
-    auto RT = ctx->theJIT->getMainJITDylib().createResourceTracker();
-
-    // 4. Package the module and context, then hand it to the JIT
-    auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx->theModule), std::move(ctx->theContext));
-    ctx->ExitOnErr(ctx->theJIT->addModule(std::move(TSM), RT));
-
-    // 5. Immediately re-initialize the context's module and pass manager to maintain state integrity
-    ctx->InitializeModuleAndPassManager();
-
-    // 6. Look up the compiled symbol for the anonymous expression function
-    auto ExprSymbol = ctx->ExitOnErr(ctx->theJIT->lookup("__anon_expr"));
-
-    // 7. Cast the symbol address to a callable C++ function pointer and execute it
-    double (*FP)() = ExprSymbol.getAddress().toPtr<double (*)()>();
-    double actualResult = FP();
-
-    // 8. Verify the result matches the expected value
-    EXPECT_DOUBLE_EQ(actualResult, GetParam().expectedResult)
-        << "Mismatch in expression: " << GetParam().expression;
-
-    // 9. Clean up JIT memory for this test case
-    ctx->ExitOnErr(RT->remove());
-}
-
-INSTANTIATE_TEST_SUITE_P(
-  MathOperations,
-  JITExecutionParamTest,
-  ::testing::Values(
-    // Basic arithmetic operations
-    JITTestCase{"Addition", "4.0 + 5.0", 9.0},
-    JITTestCase{"Subtraction", "10.0 - 2.5", 7.5},
-    JITTestCase{"Multiplication", "3.0 * 3.0", 9.0},
-    // Operator precedence and associativity
-    JITTestCase{"Precedence", "2.0 + 3.0 * 4.0", 14.0},
-    JITTestCase{"Parentheses", "(2.0 + 3.0) * 4.0", 20.0},
-    // Comparison operations (< operator returns 1.0 if true, 0.0 if false)
-    JITTestCase{"ComparisonTrue", "1.0 < 5.0", 1.0},
-    JITTestCase{"ComparisonFalse", "5.0 < 1.0", 0.0},
-    JITTestCase{"ComplexExpression", "(1.0 + 2.0) * (5.0 < 10.0) + 4.0", 7.0},
-
-    // Add to INSTANTIATE_TEST_SUITE_P(MathOperations, ...)
-    JITTestCase{"IfTrue", "if 1.0 < 2.0 then 42.0 else 0.0", 42.0},
-    JITTestCase{"IfFalse", "if 5.0 < 2.0 then 42.0 else 0.0", 0.0},
-    JITTestCase{"ForLoopExecution",
-    // This loop starts at 1, runs while i < 4 (so i=1, 2, 3),
-    // The for loop expression itself evaluates to 0.0 according to the tutorial specs.
-      "for i = 1.0, i < 4.0, 1.0 in i * 2.0", 0.0}
-  ),
-  [](const auto& info) { return info.param.testName; }
-);
-
-// --- 10. JIT Custom Operator Test ---
-struct JITCustomOpTestCase {
-    std::string testName;
-    std::string setup;
-    std::string expression;
-    double expectedResult;
-};
-
-class JITCustomOperatorParamTest : public ::testing::TestWithParam<JITCustomOpTestCase> {
-protected:
-    std::unique_ptr<IRGenContext> ctx;
-
-    void SetUp() override {
-        ctx = std::make_unique<IRGenContext>();
-
-        std::string fullInput = GetParam().setup + "; " + GetParam().expression;
-        std::ofstream tmpFile("_jit_custom_param_input.txt");
-        tmpFile << fullInput;
-        tmpFile.close();
-        ASSERT_TRUE(freopen("_jit_custom_param_input.txt", "r", stdin) != nullptr);
-    }
-
-    void TearDown() override {
-        std::remove("_jit_custom_param_input.txt");
-        ctx.reset();
-    }
-};
-
-TEST_P(JITCustomOperatorParamTest, Evaluate) {
-    Lexer lexer;
-    Parser parser(lexer, *ctx);
-    parser.getNextToken(); // prime
-
-    if (!GetParam().setup.empty()) {
-        auto FnAST = parser.parseDefinition();
-        ASSERT_NE(FnAST, nullptr) << "Failed to parse setup definition";
-        auto *FnIR = FnAST->codegen(*ctx);
-        ASSERT_NE(FnIR, nullptr) << "Failed to codegen setup definition";
-
-        auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx->theModule), std::move(ctx->theContext));
-        ctx->ExitOnErr(ctx->theJIT->addModule(std::move(TSM)));
-        ctx->InitializeModuleAndPassManager();
-
-        parser.getNextToken(); // eat ';'
-    }
-
-    auto ast = parser.parseTopLevelExpr();
-    ASSERT_NE(ast, nullptr) << "Failed to parse expression";
-    auto *F = ast->codegen(*ctx);
-    ASSERT_NE(F, nullptr) << "Failed to codegen expression";
-
-    auto RT = ctx->theJIT->getMainJITDylib().createResourceTracker();
-    auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx->theModule), std::move(ctx->theContext));
-    ctx->ExitOnErr(ctx->theJIT->addModule(std::move(TSM), RT));
-    ctx->InitializeModuleAndPassManager();
-
-    auto ExprSymbol = ctx->ExitOnErr(ctx->theJIT->lookup("__anon_expr"));
-    double (*FP)() = ExprSymbol.getAddress().toPtr<double (*)()>();
-    EXPECT_DOUBLE_EQ(FP(), GetParam().expectedResult);
-
-    ctx->ExitOnErr(RT->remove());
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    CustomOperators,
-    JITCustomOperatorParamTest,
-    ::testing::Values(
-        JITCustomOpTestCase{"Binary", "def binary@ 5 (a b) a + b", "1.0 @ 2.0", 3.0},
-        JITCustomOpTestCase{"Unary", "def unary! (a) 0 - a", "!42.0", -42.0}
-    ),
-    [](const auto& info) { return info.param.testName; }
-);
+// NOTE: Chapter 8 (object code emission) removes the JIT from IRGenContext --
+// theJIT is never created -- so the JIT execution suites that Refactor4-7 carry
+// were removed here: they dereferenced a null unique_ptr and crashed with
+// SIGSEGV. JIT behavior remains covered by the Refactor4-7 test suites; this
+// chapter's end-to-end coverage is test/filecheck/objfile.k.

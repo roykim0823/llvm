@@ -83,7 +83,7 @@ public:
               std::vector<std::unique_ptr<ExprAST>> Args)
       : Callee(Callee), Args(std::move(Args)) {}
 
-  llvm::Value *codegen(IRGenContext &ctx);
+  llvm::Value *codegen(IRGenContext &ctx) override;
 };
 
 /// IfExprAST - Expression class for if/then/else.

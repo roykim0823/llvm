@@ -14,6 +14,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
 
+#include <cassert>
 #include <memory>
 #include <string>
 #include <utility>
@@ -95,7 +96,7 @@ public:
               std::vector<std::unique_ptr<ExprAST>> Args)
       : Callee(Callee), Args(std::move(Args)) {}
 
-  llvm::Value *codegen(IRGenContext &ctx);
+  llvm::Value *codegen(IRGenContext &ctx) override;
 };
 
 /// IfExprAST - Expression class for if/then/else.

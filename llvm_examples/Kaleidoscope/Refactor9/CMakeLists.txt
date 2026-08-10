@@ -37,3 +37,14 @@ add_executable(toy ${SOURCES})
 # This is the magic line: it adds 'include/' to the header search path
 target_include_directories(toy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(toy PRIVATE ${llvm_libs})
+# lit + FileCheck tests (end-to-end: feed a .k file to toy, check the printed
+# IR and debug-info metadata). Chapter 9 has no gtest suites: its observable
+# behavior (DWARF metadata in the module dump) is text, which FileCheck matches directly.
+enable_testing()
+find_program(LIT_TOOL NAMES lit llvm-lit)
+if(LIT_TOOL)
+  add_test(NAME filecheck
+           COMMAND ${LIT_TOOL} -v ${CMAKE_CURRENT_SOURCE_DIR}/test/filecheck)
+  set_tests_properties(filecheck PROPERTIES
+    ENVIRONMENT "TOY_BIN=$<TARGET_FILE:toy>;LIT_EXEC_ROOT=${CMAKE_CURRENT_BINARY_DIR}/lit")
+endif()

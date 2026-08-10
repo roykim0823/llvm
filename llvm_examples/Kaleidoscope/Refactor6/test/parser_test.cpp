@@ -105,7 +105,9 @@ INSTANTIATE_TEST_SUITE_P(UnaryTests, ParseUnaryExprTest, ::testing::Values(
     ParserTestCase{"NestedUnary", "!!x", true},
     ParserTestCase{"UnaryPrimary", "42", true},
     ParserTestCase{"UnaryWithParens", "!(x + y)", true},
-    ParserTestCase{"UnaryComplex", "!!(x < y)", true}
+    ParserTestCase{"UnaryComplex", "!!(x < y)", true},
+    ParserTestCase{"UnaryMissingOperand", "!", false},   // operator with nothing to apply to
+    ParserTestCase{"UnaryDanglingParen", "!(x", false}   // operand fails to parse
 ), [](const auto& info) { return info.param.testName; });
 
 // --- 5. Full Binary Expressions ---
@@ -150,8 +152,9 @@ INSTANTIATE_TEST_SUITE_P(PrototypeTests, ParsePrototypeTest, ::testing::Values(
     ParserTestCase{"UnaryProto", "unary!(v)", true},
     ParserTestCase{"BinaryProto", "binary@(v1 v2)", true},
     ParserTestCase{"BinaryWithPrecProto", "binary@ 10 (v1 v2)", true},
-    ParserTestCase{"BinaryInvalidPrec", "binary@(200 v1 v2)", false},
-    ParserTestCase{"BinaryMissingArg", "binary@(10 v1)", false},
+    ParserTestCase{"BinaryInvalidPrec", "binary@ 200 (v1 v2)", false},  // reaches the 1..100 precedence validation
+    ParserTestCase{"BinaryMissingArg", "binary@ 10 (v1)", false},        // reaches the operand-count validation
+    ParserTestCase{"BinaryPrecInsideParens", "binary@(200 v1 v2)", false}, // syntax error: precedence belongs before '('
     ParserTestCase{"UnaryMissingArg", "unary!()", false}
 ), [](const auto& info) { return info.param.testName; });
 
