@@ -20,6 +20,8 @@
 
 # Nested build directory
 build/
+# lit scratch output (created when running lit by hand without LIT_EXEC_ROOT)
+**/test/filecheck/Output/
 
 #==============================================================================#
 # Directories to ignore (do not add trailing '/'s, they skip symlinks).
