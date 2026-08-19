@@ -1,0 +1,6 @@
+# To run "llvm-as < t.ll | opt -passes=view-cfg" (view_cfg/run.sh)
+# macOS:
+brew install graphviz
+pip install xdot
+# Debian/Ubuntu:
+sudo apt install xdot graphviz

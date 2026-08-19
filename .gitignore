@@ -33,3 +33,4 @@ build/
 .clangd
 # Claude Code local config (matches .claude anywhere in the tree)
 .claude
+*.o
