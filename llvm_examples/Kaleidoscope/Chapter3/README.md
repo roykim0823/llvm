@@ -149,8 +149,8 @@ llvm::Value *NumberExprAST::codegen(IRGenContext &ctx) {
 }
 
 llvm::Value *VariableExprAST::codegen(IRGenContext &ctx) {
-  llvm::Value *V = ctx.namedValues[Name];   // upstream operator[] quirk kept:
-  if (!V)                                   // a failed lookup inserts a null entry
+  llvm::Value *V = ctx.namedValues[Name];   // note: operator[] inserts a
+  if (!V)                                   // null entry on a failed lookup
     return logErrorV("Unknown variable name");
   return V;
 }
@@ -282,12 +282,11 @@ Two upstream behaviors are kept deliberately:
   generated and the exit dump was dropped (see the note at the end of
   `mainLoop()` in `src/parser.cpp`).
 
-## The driver: printing IR
+## The driver: Printing IR
 
 Each `handle*` now generates and prints; note the top-level case still
-deletes the anonymous function after showing it (upstream behavior — it has
-served its purpose, and the next top-level expression will create a fresh
-`__anon_expr`):
+deletes the anonymous function after showing it — it has served its purpose,
+and the next top-level expression will create a fresh `__anon_expr`:
 
 **`Chapter3/src/parser.cpp`**
 ```cpp
@@ -305,7 +304,7 @@ void Parser::handleTopLevelExpression() {
 }
 ```
 
-## File-by-file: what changed from Chapter2
+## File-by-file: What changed from Chapter2
 
 Chapter 3 adds new files and touches some existing ones; several files carry
 the same name as in Chapter2 but are NOT all identical. The exact split:
@@ -383,8 +382,8 @@ void Parser::handleDefinition() {       void Parser::handleDefinition() {
                                         }
 ```
 
-`mainLoop()` itself is unchanged except for a note documenting that the
-upstream end-of-loop module dump was dropped as unreachable.
+`mainLoop()` itself is unchanged except for a note documenting that an
+unreachable end-of-loop module dump was removed.
 
 `Chapter3/test/parser_test.cpp` — mechanical constructor update only (each test now
 builds an `IRGenContext ctx;` and calls `Parser parser(lexer, ctx);`); the

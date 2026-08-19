@@ -134,7 +134,7 @@ works), while this refactor keeps the three `InitializeNativeTarget*` calls
 from the JIT chapters — host-only, smaller link, but `lookupTarget` would
 fail for a non-native triple.
 
-## The payoff: calling Kaleidoscope from C++
+## The payoff: Calling Kaleidoscope from C++
 
 `example/average.txt` is the Kaleidoscope side, `example/main.cpp` the
 consumer — `extern "C"` matching how Kaleidoscope emits unmangled names:
@@ -177,7 +177,7 @@ average of 3.0 and 4.0: 3.5
 That last line is C++ calling machine code that a compiler we wrote emitted
 — no LLVM libraries, no JIT, no interpreter at runtime.
 
-## File-by-file: what changed from Chapter7
+## File-by-file: What changed from Chapter7
 
 **New files**
 

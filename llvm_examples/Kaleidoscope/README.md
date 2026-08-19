@@ -8,6 +8,41 @@ type (every value is a 64-bit double); the tutorial grows a complete compiler
 for it — lexer, parser, LLVM IR codegen, optimizer, JIT, object emission,
 debug info — one chapter at a time.
 
+## The shape of a compiler
+
+A **compiler** is a translator: it takes a program written in one language
+(here, Kaleidoscope source text) and produces an equivalent program in
+another, lower-level one (ultimately machine code). It cannot translate
+word-for-word — `x + y*2` means "multiply first" no matter what order the
+characters arrive in — so before producing anything, a compiler must first
+*understand* the input's structure, and only then re-express it. That split
+is reflected in how virtually every modern compiler is organized: three
+phases with clean handoffs, meeting at a shared **intermediate
+representation (IR)**:
+
+```
+              ┌─ understand ─┐   ┌── improve ──┐   ┌── produce ──┐
+  source ───▶ │   FRONTEND   │──▶│  OPTIMIZER  │──▶│   BACKEND   │───▶ machine
+  text        │ lexer,parser │IR │  IR-to-IR   │IR │ instruction │     code
+              │  AST, sema   │   │   passes    │   │  selection  │
+              └──────────────┘   └─────────────┘   └─────────────┘
+  Ch 1–2: lexer/parser/AST       Ch 4: pass         Ch 4: JIT (in-process)
+  Ch 3:  emit the IR                   pipeline      Ch 8: object files
+  Ch 5–7: language features (frontend + codegen grow together)
+  Ch 9:  debug info (metadata threaded through all three phases)
+```
+
+The phase boundaries are why LLVM exists as a *library*: the optimizer and
+backend are already written and language-agnostic, reusable by anything that
+can produce LLVM IR (clang does for C++, rustc for Rust). Inventing a new
+language therefore means writing *only the frontend* — which is exactly why
+the tutorial is titled "My First Language **Frontend**", and why the chapter
+progression above spends most of its time left of the first handoff. Two
+consequences of the shared IR worth knowing up front: M frontends and N
+backends need only M+N translators instead of M×N, and every optimization is
+written once, for all languages and all targets ([Chapter3's
+README](Chapter3/README.md) expands on this where the IR first appears).
+
 ## Directory map
 
 | Directory | What it is |
@@ -102,7 +137,7 @@ Notes that apply everywhere:
 - GoogleTest is fetched by CMake (`FetchContent`, pinned release); binaries
   land as `./build/lexer_test` etc.
 
-## Testing: the two schemes
+## Testing: The two schemes
 
 The test setup deliberately mirrors how the LLVM project itself is tested.
 LLVM uses two complementary schemes:

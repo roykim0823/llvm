@@ -46,7 +46,7 @@ renamed `__anon_expr` → **`main`**, and the whole module (code + metadata)
 printed once at exit. That dump is valid LLVM assembly, so
 `toy < fib.ks 2>&1 | clang -x ir -` produces a debuggable native executable.
 (The JIT object returns from its Chapter 8 exile for exactly one duty:
-supplying a data layout — upstream does the same.)
+supplying a data layout.)
 
 Reference: [Chapter 9: Adding Debug Information](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl09.html).
 Language features are frozen at [Chapter7](../Chapter7/README.md)'s state.
@@ -57,9 +57,8 @@ Language features are frozen at [Chapter7](../Chapter7/README.md)'s state.
 ## Tracking source locations
 
 The lexer stops calling `getchar()` directly; every character now flows
-through `advance()`, which maintains a line/column counter. In this refactor
-that lives in a small `DebugInfoManager` class the `Lexer` holds a reference
-to (upstream uses free functions and globals):
+through `advance()`, which maintains a line/column counter. That lives in a
+small `DebugInfoManager` class the `Lexer` holds a reference to:
 
 **`Chapter9/src/debug.cpp`**
 ```cpp
@@ -84,8 +83,7 @@ locations into the AST: `ExprAST` gains a `SourceLocation Loc` plus
 via constructor (`VariableExprAST`, `CallExprAST`, `BinaryExprAST`,
 `IfExprAST`, `PrototypeAST`). Every node also gains a `dump()` method — an
 indenting AST pretty-printer that prints each node with its `line:col`
-(upstream adds the same; useful for debugging the compiler rather than the
-program).
+(useful for debugging the compiler rather than the program).
 
 One deviation from upstream to know about: upstream declares
 `ExprAST(SourceLocation Loc = CurLoc)` — the default argument reads the
@@ -199,7 +197,7 @@ void DebugInfo::emitLocation(ExprAST *AST, IRGenContext &ctx) {
 }
 ```
 
-## File-by-file: what changed from Chapter8
+## File-by-file: What changed from Chapter8
 
 This chapter also downsizes the harness: gtest is gone entirely (see Tests),
 and the previous chapters' `.k` suites don't apply to a driver that no

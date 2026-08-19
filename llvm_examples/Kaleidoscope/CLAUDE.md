@@ -9,8 +9,9 @@ a separate MLIR-toy-style redesign with its own conventions — nothing in this
 file applies to it.
 
 `Kaleidoscope/README.md` (top level) is the reader-facing home for everything
-shared: directory map, the two tracks, the common class mapping, language
-gotchas, build/run, and the full two-scheme testing + lit/`lit.cfg`
+shared: the general compiler intro ("The shape of a compiler": three phases +
+chapter roadmap), directory map, the two tracks, the common class mapping,
+language gotchas, build/run, and the full two-scheme testing + lit/`lit.cfg`
 exposition. Chapter READMEs must NOT duplicate that material — they link to
 `../README.md#testing-the-two-schemes` (and `#build-and-run`) and cover only
 what their chapter adds. When common facts change, update the top README, not
@@ -22,7 +23,11 @@ Deviations are rare and intentional; when you find code that differs from the
 tutorial snippet, treat it as deliberate and document it, don't "fix" it.
 Known deviations/gotchas: the lexer validates a leading `.` in numbers
 (`.5` → 0.5, lone `.` is an ASCII token); identifiers do NOT allow `_`;
-no scientific notation; Chapter8 deliberately has no JIT.
+no scientific notation; `getTokPrecedence()` uses `map::find` instead of
+upstream's `operator[]` (same results, no default-insert side effect); the
+first-token priming lives inside `mainLoop()` rather than `main()`, so no
+`ready>` prompt appears before the first line of input; Chapter8
+deliberately has no JIT.
 
 ## Task: write README.md for each Chapter directory
 
@@ -38,14 +43,18 @@ Required shape (learned from review of Chapter2):
 
 1. **Title**: `# Chapter N — <topic>`, matching the directory name (the one
    exception: dir `Chapter2` covers two tutorial chapters and titles itself
-   `# Chapter 1 & 2 — ...`).
+   `# Chapter 1 & 2 — ...`). In `##` headings, the phrase after a colon
+   starts with an uppercase letter (`## Chapter 1: The Lexer`,
+   `## File-by-file: What changed from Chapter7`); `###` subsections are
+   plain sentence case.
 2. **Intro, one continuous flow under the title — no "Overview"/"Overall
    structure" heading.** Order: general concepts the chapter introduces
    (define terms like a textbook would) → a small generic ASCII figure →
    links to the chapter doc(s) → brief language/feature recap (a paragraph,
    not a section) → concrete pipeline/architecture diagram drawn from the
    refactored classes → design notes → file-mapping table (`| File |
-   Tutorial counterpart |`) noting which globals became which class members.
+   Contents — and its tutorial counterpart |`) stating per file which
+   upstream globals/free functions became which class members/methods.
    For Chapter3+ the table becomes a "File-by-file: what changed from
    ChapterN-1" section with three groups — new files / same filename but
    byte-identical / same filename but modified — where every modified file
@@ -54,11 +63,20 @@ Required shape (learned from review of Chapter2):
    eyeballing. This section is reference material: place it near the END of
    the README, right before "Build and run", and leave a one-line pointer to
    it at the end of the intro.
-3. **Chapter sections with code**: split big chapters into parts (Chapter2
-   splits Ch2 into "part 1: the AST" and "part 2: the parser"). Explain the
+3. **Chapter sections with code**: split big chapters into numbered
+   subsections under a short chapter-level intro (Chapter2 has
+   "## Chapter 2: The Parser and AST" introducing the approach, then
+   "## 2.1 The Abstract Syntax Tree" and "## 2.2 The Parser"). Explain the
    code tutorial-style: real snippets from `src/`/`include/` followed by
    prose on WHY, plus walkthrough traces for tricky algorithms (e.g. the
-   `parseBinOpRHS` trace of `a + b * c`). Give every deliberate deviation
+   `parseBinOpRHS` trace of `a + b * c`). Block granularity: **one code
+   block per function, each followed by full explanatory prose** (see
+   Chapter2's parser subsections) — do NOT merge several functions into one
+   marker-annotated block; the keyed-notes format compresses explanations
+   too much. The single annotated block with `// [1]` markers is reserved
+   for walking through the branches of ONE function (see Chapter2's
+   `gettok()`), where a region covered in full elsewhere may be elided with
+   `...` and a pointer comment. Give every deliberate deviation
    from upstream its own subsection: upstream snippet vs refactored snippet,
    flow chart, step-by-step rationale, behavior-comparison table.
 4. **Diagrams**: ASCII boxes/arrows in fenced code blocks (no mermaid).

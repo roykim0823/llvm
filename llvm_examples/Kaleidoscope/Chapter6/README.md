@@ -48,13 +48,12 @@ Reference: [Chapter 6: Extending the Language — User-defined Operators](https:
 One refactor-specific structural change: the precedence table
 `binopPrecedence` **moves from `Parser` to `IRGenContext`**. Installing a new
 operator happens in `FunctionAST::codegen()` (see below), which only has the
-context — in the upstream tutorial everything is a global so the question
-never arises; here the map's owner had to follow its writers.
+context — so the map's owner had to follow its writers.
 
 (A precise file-by-file diff against Chapter5 is in
 [File-by-file](#file-by-file-what-changed-from-chapter5) near the end.)
 
-## Parsing: operator prototypes and the `unary` layer
+## Parsing: Operator prototypes and the `unary` layer
 
 `parsePrototype()` now accepts three shapes, tagged by `Kind`:
 
@@ -123,7 +122,7 @@ to be parse errors and now **parse fine** (as applications of a unary `+`) —
 they only fail later, at codegen, if no `unary+` was defined. Two parser
 tests flipped from must-fail to must-pass because of this.
 
-## Codegen: fall back to a call
+## Codegen: Fall back to a call
 
 `UnaryExprAST::codegen()` is nothing but the desugaring:
 
@@ -183,7 +182,7 @@ definition, codegen installs the precedence, and *the next line of input
 parses differently than it would have before*. Language extension as a
 runtime side effect.
 
-## The payoff: a Mandelbrot set
+## The payoff: A Mandelbrot set
 
 With `!`, `-` (unary), `>`, `|`, `&`, `=`, `:` defined *in Kaleidoscope
 itself* (see `mandel.txt` — e.g. the sequencing operator
@@ -204,7 +203,7 @@ tutorial's showcase — an ASCII Mandelbrot renderer. `./run.sh` ends with:
 ++++++++......                                                   ..++++++******
 ```
 
-## File-by-file: what changed from Chapter5
+## File-by-file: What changed from Chapter5
 
 **New files**
 

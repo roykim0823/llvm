@@ -159,7 +159,7 @@ ships exactly this code with the same comment; a real frontend would add a
 Returning `Val` makes assignment an expression, so it chains and composes
 with the sequencing operator: `printd(x) : x = 4 : printd(x)`.
 
-## `var/in`: declarations with scope
+## `var/in`: Declarations with scope
 
 ```
 varexpr ::= 'var' identifier ('=' expression)?
@@ -231,7 +231,7 @@ loop:                                             ; preds = %loop, %entry
 This is exactly the IR a hand-written SSA frontend would have produced —
 but nobody had to write the hard part.
 
-## File-by-file: what changed from Chapter6
+## File-by-file: What changed from Chapter6
 
 **New files**
 

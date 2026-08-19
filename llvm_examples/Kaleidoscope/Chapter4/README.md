@@ -266,10 +266,10 @@ evaluate-once-and-discard. Function *definitions* take the same
 `addModule` + fresh-module path but with no tracker — they must stay resident
 so later expressions can call them.
 
-## File-by-file: what changed from Chapter3
+## File-by-file: What changed from Chapter3
 
 No new source files — the JIT class comes from the shared repo-level
-`include/KaleidoscopeJIT.h` (taken from upstream LLVM). The exact split:
+`include/KaleidoscopeJIT.h`. The exact split:
 
 **New files**
 

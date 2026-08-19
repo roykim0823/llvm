@@ -68,7 +68,7 @@ That's what lets them slot into the existing grammar as just two more
 (A precise file-by-file diff against Chapter4 is in
 [File-by-file](#file-by-file-what-changed-from-chapter4) near the end.)
 
-## Lexer and parser: five keywords, two productions
+## Lexer and parser: Five keywords, two productions
 
 The lexer additions are five identifier checks (`if`, `then`, `else`, `for`,
 `in` → `tok_if` ... `tok_in`); the grammar grows two productions, dispatched
@@ -101,7 +101,7 @@ and `ForExprAST{VarName, Start, End, Step, Body}` — note the loop *variable
 name* is data here; it doesn't exist as a variable anywhere until codegen
 makes a phi for it.
 
-## if/then/else codegen: the diamond and the phi
+## if/then/else codegen: The diamond and the phi
 
 **`Chapter5/src/codegen.cpp`**
 ```cpp
@@ -179,7 +179,7 @@ matches the raw codegen above. Two real examples: InstCombine flips
 constants, SimplifyCFG deletes the diamond entirely and replaces the phi with
 a single `select` instruction.
 
-## for codegen: the loop phi and variable shadowing
+## for codegen: The loop phi and variable shadowing
 
 The target shape, from the comment in the source:
 
@@ -286,7 +286,7 @@ The directory also gains a tiny helper, `view_cfg/`: `run.sh` pipes an `.ll`
 file through `opt -passes=view-cfg` to render a function's CFG with Graphviz
 — handy for actually *seeing* the diamond and the loop backedge.
 
-## File-by-file: what changed from Chapter4
+## File-by-file: What changed from Chapter4
 
 **New files**
 

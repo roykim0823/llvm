@@ -74,7 +74,12 @@ INSTANTIATE_TEST_SUITE_P(
         LexerTestCase{"123.45", tok_number, "", 123.45},
         LexerTestCase{"0.001", tok_number, "", 0.001},
         LexerTestCase{"1.234567e+10", tok_number, "", 1.234567},  // the lexer stops at 'e' (not a digit/dot), so strtod never sees the exponent; 'e+10' is lexed as separate tokens
+
+        // Edge cases for numbers
         LexerTestCase{".5", tok_number, "", 0.5},
+        LexerTestCase{"5.", tok_number, "", 5.0},
+        LexerTestCase{".", tok_identifier, "."},  // a single dot is not a valid number, so it should be treated as an identifier
+        LexerTestCase{".x", tok_identifier, ".x"},  // a dot followed by a letter is not a valid number, so it should be treated as an identifier
         LexerTestCase{".0123", tok_number, "", 0.0123},
         LexerTestCase{"3.14.15", tok_number, "", 3.14}, // the lexer consumes all of "3.14.15"; strtod stops at the second dot
 

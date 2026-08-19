@@ -68,20 +68,25 @@ INSTANTIATE_TEST_SUITE_P(
         // Identifiers
         LexerTestCase{"myVar", tok_identifier, "myVar"},
         LexerTestCase{"x123", tok_identifier, "x123"},
+        LexerTestCase{"my_var", tok_identifier, "my"},  // '_' is not isalnum, so it ends the identifier: "my_var" lexes as my, '_', var
 
         // Numbers
         LexerTestCase{"42", tok_number, "", 42.0},
         LexerTestCase{"123.45", tok_number, "", 123.45},
         LexerTestCase{"0.001", tok_number, "", 0.001},
         LexerTestCase{"1.234567e+10", tok_number, "", 1.234567},  // the lexer stops at 'e' (not a digit/dot), so strtod never sees the exponent; 'e+10' is lexed as separate tokens
+        
         LexerTestCase{".5", tok_number, "", 0.5},
         LexerTestCase{".0123", tok_number, "", 0.0123},
+        LexerTestCase{"5.", tok_number, "", 5.0},
         LexerTestCase{"3.14.15", tok_number, "", 3.14}, // the lexer consumes all of "3.14.15"; strtod stops at the second dot
 
 
         // Single characters (ASCII)
         LexerTestCase{"+", '+'},
         LexerTestCase{"(", '('},
+        LexerTestCase{".", '.'},   // lone dot is NOT a number (deviation from upstream, which lexes it as 0.0)
+        LexerTestCase{".x", '.'},  // dot not followed by a digit: returned as ASCII '.', 'x' is left for the next call
 
         // Comments and Whitespace (should skip and return next token)
         LexerTestCase{"# this is a comment\n42", tok_number, "", 42.0},
