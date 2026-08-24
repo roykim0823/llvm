@@ -79,49 +79,104 @@ made to work by re-declaring known functions into each new module from the
 
 ## The optimizer: FunctionPassManager
 
-The motivating example — `IRBuilder` folded `1+2` to `3.0` already in
-Chapter 3, but only a real pass pipeline can notice that the two operands of
-the multiply are *the same value*:
+First, what `IRBuilder` already buys. `def test(x) 1+2+x;` does *not* come
+out as a literal transcription of the AST (which would be `fadd 2.0, 1.0`,
+then a second `fadd` with `%x`) — Chapter 3's binary already prints one
+pre-folded add:
+
+```
+ready> def test(x) 1+2+x;
+Read function definition:
+define double @test(double %x) {
+entry:
+  %addtmp = fadd double 3.000000e+00, %x
+  ret double %addtmp
+}
+```
+
+Constant folding is so common and so important that many language
+implementors build it into their AST representation. With LLVM you don't
+need to: every instruction is created through the builder, and the builder
+itself checks each call for a folding opportunity. Upstream's advice is to
+always generate code this way — there is no "syntactic overhead" (no
+constant checks uglifying every codegen method), and it can dramatically
+reduce the amount of IR emitted for constant-heavy inputs (think languages
+with macro preprocessors).
+
+The builder's limit is that all of its analysis happens *inline, at the
+moment an instruction is created*. Feed it something that needs a view wider
+than one instruction and it is stuck — this is Chapter 3's binary again:
 
 ```
 ready> def test(x) (1+2+x)*(x+(1+2));
 Read function definition:
 define double @test(double %x) {
 entry:
-  %addtmp = fadd double %x, 3.000000e+00
-  %multmp = fmul double %addtmp, %addtmp     ; one add, squared — not two
+  %addtmp = fadd double 3.000000e+00, %x
+  %addtmp1 = fadd double %x, 3.000000e+00   ; same value as %addtmp
+  %multmp = fmul double %addtmp, %addtmp1
   ret double %multmp
 }
 ```
 
-The setup (in `InitializeModuleAndPassManager()`, so it is rebuilt with every
-fresh module) creates the pass manager, the analysis managers, and the four
-transform passes, then wires the analysis side up via `PassBuilder`:
+Both operands of the multiply are the same `x+3`; we would like
+`tmp = x+3; result = tmp*tmp`. No amount of *local* analysis gets there — it
+takes two cooperating whole-function transformations: **reassociation**, to
+normalize the two adds into one lexical form (`3+x` vs `x+3`), and **common
+subexpression elimination (CSE)**, to delete the now-obvious duplicate.
+That is exactly what LLVM's **passes** provide, and two upstream design
+notes frame how they are used. First, LLVM refuses the "mistaken notion that
+one set of optimizations is right for all languages and all situations" —
+the implementor decides which passes run, in what order, in what situation.
+Second, granularity is part of that choice: a REPL generating one function
+at a time wants **per-function** passes run as the user types, while a
+hypothetical *static* Kaleidoscope compiler would use exactly this code and
+simply defer the optimizer until the whole file is parsed — whole-**module**
+passes can then look across as much code as possible (at link time, a
+substantial portion of the entire program).
+
+The setup (in `InitializeModuleAndPassManager()`, so it is rebuilt with
+every fresh module) opens the new module, then creates the pass manager,
+the analysis managers, and the four transform passes, and wires the analysis
+side up via `PassBuilder`:
 
 **`Chapter4/include/ir_gen_ctx.h`**
 ```cpp
-// Create new pass and analysis managers.
-theFPM = std::make_unique<llvm::FunctionPassManager>();
-theLAM = std::make_unique<llvm::LoopAnalysisManager>();
-theFAM = std::make_unique<llvm::FunctionAnalysisManager>();
-theCGAM = std::make_unique<llvm::CGSCCAnalysisManager>();
-theMAM = std::make_unique<llvm::ModuleAnalysisManager>();
-thePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
-theSI = std::make_unique<llvm::StandardInstrumentations>(*theContext,
-                                             /*DebugLogging*/ true);
-theSI->registerCallbacks(*thePIC, theMAM.get());
+void InitializeModuleAndPassManager() {
+    // Open a new context and module.
+    theContext = std::make_unique<llvm::LLVMContext>();
+    theModule = std::make_unique<llvm::Module>("my cool jit", *theContext);
 
-// Add transform passes.
-theFPM->addPass(llvm::InstCombinePass());   // peephole, bit-twiddling
-theFPM->addPass(llvm::ReassociatePass());   // reorder by ranks: x+3 == 3+x
-theFPM->addPass(llvm::GVNPass());           // value numbering: kill duplicates
-theFPM->addPass(llvm::SimplifyCFGPass());   // delete dead blocks, merge blocks
+    // set the data layout of the module to match the target machine's data layout.
+    // This is important for ensuring that the generated code is compatible with the target architecture.
+    theModule->setDataLayout(theJIT->getDataLayout());
 
-// Register analysis passes used in these transform passes.
-llvm::PassBuilder PB;
-PB.registerModuleAnalyses(*theMAM);
-PB.registerFunctionAnalyses(*theFAM);
-PB.crossRegisterProxies(*theLAM, *theFAM, *theCGAM, *theMAM);
+    // Create a new builder for the module.
+    builder = std::make_unique<llvm::IRBuilder<>>(*theContext);
+
+    // Create new pass and analysis managers.
+    theFPM = std::make_unique<llvm::FunctionPassManager>();
+    theLAM = std::make_unique<llvm::LoopAnalysisManager>();
+    theFAM = std::make_unique<llvm::FunctionAnalysisManager>();
+    theCGAM = std::make_unique<llvm::CGSCCAnalysisManager>();
+    theMAM = std::make_unique<llvm::ModuleAnalysisManager>();
+    thePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
+    theSI = std::make_unique<llvm::StandardInstrumentations>(*theContext,
+                                                 /*DebugLogging*/ true);
+    theSI->registerCallbacks(*thePIC, theMAM.get());
+
+    // Add transform passes.
+    theFPM->addPass(llvm::InstCombinePass());   // peephole, bit-twiddling
+    theFPM->addPass(llvm::ReassociatePass());   // reorder by ranks: x+3 == 3+x
+    theFPM->addPass(llvm::GVNPass());           // value numbering: kill duplicates
+    theFPM->addPass(llvm::SimplifyCFGPass());   // delete dead blocks, merge blocks
+
+    // Register analysis passes used in these transform passes.
+    llvm::PassBuilder PB;
+    PB.registerModuleAnalyses(*theMAM);
+    PB.registerFunctionAnalyses(*theFAM);
+    PB.crossRegisterProxies(*theLAM, *theFAM, *theCGAM, *theMAM);
+}
 ```
 
 Why so much scaffolding for four passes: in LLVM's new pass manager,
@@ -131,6 +186,9 @@ call-graph / module level) compute and cache the results. The
 `crossRegisterProxies` call lets a pass at one level query analyses at
 another. `StandardInstrumentations` + `PassInstrumentationCallbacks` hook the
 standard debugging aids (`-print-after-all`-style logging) into the pipeline.
+The four transform passes themselves are, in upstream's words, "a pretty
+standard set of 'cleanup' optimizations that are useful for a wide variety
+of code" — a good starting place, not a tuned pipeline.
 
 Running the pipeline is one line at the end of `FunctionAST::codegen()`,
 right after `verifyFunction` — every function is optimized the moment it is
@@ -145,6 +203,27 @@ generated:
     ctx.theFPM->run(*TheFunction, *ctx.theFAM);
 ```
 
+The `FunctionPassManager` optimizes and updates the `Function*` **in place**
+— which is why the driver's later `print` shows optimized IR. With the
+pipeline in, the motivating example comes out right:
+
+```
+ready> def test(x) (1+2+x)*(x+(1+2));
+Read function definition:
+define double @test(double %x) {
+entry:
+  %addtmp = fadd double %x, 3.000000e+00
+  %multmp = fmul double %addtmp, %addtmp     ; one add, squared — not two
+  ret double %multmp
+}
+```
+
+— reassociation made the adds identical, CSE deleted one, saving a
+floating-point add on every execution. To explore beyond these four passes,
+upstream offers three pointers: the (admittedly incomplete) pass
+documentation, the pass list Clang actually runs, and the `opt` tool, which
+lets you experiment with pipelines from the command line.
+
 A limit worth seeing: in `def foo2(x) sin(x)*sin(x) + cos(x)*cos(x);` the
 optimized IR still contains **two** `sin` calls and **two** `cos` calls. GVN
 deduplicates pure computation (`x*y + x*y` → one `fmul`), but a call to a
@@ -153,18 +232,31 @@ must conservatively keep both calls.
 
 ## The JIT: KaleidoscopeJIT
 
-`KaleidoscopeJIT` is the tutorial-provided ORC wrapper — it lives once at the
+IR is LLVM's "common currency": the same module can be run through
+optimization passes (as above), dumped as text or bitcode, compiled to an
+assembly file for some target — or JIT-compiled. This chapter takes the last
+door: the user keeps entering function bodies as before, but top-level
+expressions are now evaluated immediately — type `1 + 2;`, see `3`.
+
+`KaleidoscopeJIT` is the tutorial-provided ORC wrapper, copied from
+`llvm/examples/Kaleidoscope/include/KaleidoscopeJIT.h` in the LLVM source
+tree (upstream takes it as given here; the separate "Building a JIT"
+tutorials dissect and extend it). It lives once at the
 repo level (`include/KaleidoscopeJIT.h`, included as
 `"../../include/KaleidoscopeJIT.h"`) since every later chapter reuses it. Its
 API is three calls: `Create()`, `addModule(TSM)` (compile a module's
 functions on first use), and `lookup(name)` (get a symbol's address). Two of
 its internals matter to the driver:
 
-- It resolves symbols it doesn't own via
+- Its symbol resolution is layered: a lookup first searches everything
+  already added to the JIT, newest module to oldest; only when nothing
+  matches does it fall back to
   `DynamicLibrarySearchGenerator::GetForCurrentProcess` — i.e. **dlsym into
   the running process**. That is the entire "standard library" story:
   `extern sin(x);` works because the JIT'd call binds to libm's `sin` already
-  loaded into the process.
+  loaded into the process. (Upstream teases where tweaking this rule leads:
+  restricting the symbols JIT'd code may see for security, dynamic code
+  generation keyed on symbol names, even lazy compilation.)
 - `addModule` takes a `ThreadSafeModule`, which owns *both* the module and
   its `LLVMContext` — which is why the driver moves both out of the
   `IRGenContext` and immediately rebuilds them.
@@ -190,6 +282,37 @@ the IR is generated with the exact type sizes/alignment the JIT will compile
 for.
 
 ### One module per function, and the prototype registry
+
+Why separate modules at all? Upstream derives the design from a failure.
+Suppose the anonymous expression shared one module with everything else —
+then `RT->remove()`, freeing the anonymous expression after evaluation,
+would delete *the whole module*, previously defined functions included, and
+the next call to one of them would die:
+
+```
+ready> testfunc(4, 10);
+Evaluated to 24.000000
+
+ready> testfunc(5, 10);
+ready> LLVM ERROR: Program used external function 'testfunc' which could not be resolved!
+```
+
+(a transcript of upstream's intermediate, single-module version — the
+finished chapter never behaves this way). A **module is the JIT's unit of
+allocation**, so the anonymous expression gets a module of its own and can
+be freed without collateral damage. Upstream then goes one step further —
+*every* function in its own module — because the tutorial's text (which
+predates LLVM 9) touted a REPL nicety that required it: adding a function to
+the JIT more than once, with `lookup` always returning the newest
+definition, i.e. `def foo(x) x+1;` … `def foo(x) x+2;` re-defining `foo`.
+**That feature no longer exists.** As upstream's own warning box says, since
+LLVM 9 the OrcV2 APIs follow static/dynamic-linker rules and reject
+duplicate symbols. In this chapter's binary, a second `def foo(x) ...`
+still parses, codegens, and prints its IR — then `addModule` fails with
+`Duplicate definition of symbol '_foo'` and `ExitOnErr` terminates the REPL.
+The one-module-per-function layout survives as simple uniformity: the
+anonymous-expression module has to be separate anyway, so every definition
+takes the same path.
 
 Since a JIT'd module is frozen, calling `foo` from a *later* module needs a
 fresh `declare double @foo(double)` in that module — the same mechanism C
@@ -260,11 +383,47 @@ Step by step: the anonymous function's module is handed to the JIT under a
 **ResourceTracker** (a handle to everything the JIT allocates for it);
 `lookup` triggers actual compilation to native code and returns the address;
 the cast to `double (*)()` matches the known signature (no args, returns
-double — everything is a double); the call executes real machine code; and
+double — everything is a double) and works because the JIT emits code for
+the **native platform ABI**: a JIT-compiled function is indistinguishable
+from one statically linked into the binary, so a raw pointer cast and a
+plain C call are all it takes; and
 `RT->remove()` frees the JIT'd memory, since `__anon_expr` is
 evaluate-once-and-discard. Function *definitions* take the same
 `addModule` + fresh-module path but with no tracker — they must stay resident
 so later expressions can call them.
+
+### Deviation from upstream: `putchard` arrives in Chapter 5
+
+Upstream closes the chapter by extending the language from the *host* side:
+since unresolved symbols fall back to dlsym on the running process, any
+`extern "C"` function compiled into the interpreter binary is callable from
+Kaleidoscope. Its example:
+
+```cpp
+// upstream (LangImpl04)
+#ifdef _WIN32
+#define DLLEXPORT __declspec(dllexport)
+#else
+#define DLLEXPORT
+#endif
+
+/// putchard - putchar that takes a double and returns 0.
+extern "C" DLLEXPORT double putchard(double X) {
+  fputc((char)X, stderr);
+  return 0;
+}
+```
+
+With that in the binary, `extern putchard(x); putchard(120);` prints a
+lowercase `x` (ASCII 120) — and the same trick could implement file I/O,
+console input, and so on. This repo defers that code to
+[Chapter5](../Chapter5/README.md)'s `src/extern_d.cpp` (together with
+`printd`), where the chapter's examples first actually call it — Chapter 4's
+binary has **no** `putchard`. Upstream's two platform notes, for when you
+get there: on Windows the explicit `DLLEXPORT` is required because the
+dynamic loader finds symbols via `GetProcAddress`, and on Linux the host
+binary must be linked with `-rdynamic` so its symbols stay visible to dlsym
+(macOS executables export them by default).
 
 ## File-by-file: What changed from Chapter3
 

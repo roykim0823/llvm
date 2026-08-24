@@ -5,8 +5,6 @@
 
 using namespace toy;
 
-extern SourceLocation CurLoc;  // Ch9
-
 // Helper to bridge the Lexer to the Parser's CurTok
 int Parser::getNextToken() {
     return curTok = lexer.gettok();

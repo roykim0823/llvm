@@ -8,12 +8,18 @@ general concepts first:
 and memory. Source-level debugging needs a *map* from that state back to the
 source: which file/line does this PC correspond to, which stack slot holds
 the variable named `x`, what scope is active. Compilers emit this map as
-**DWARF** (the standard debug format on Unix-family systems), carried in the
-object file alongside the code. Crucially, debug info is pure *metadata* — it
-must never change what the program computes. It also explains a tradeoff
-every `-O2 -g` user has felt: optimization scrambles the map (instructions
-reordered and merged, variables promoted out of memory), which is exactly why
-this chapter **turns the Chapter 4 optimizer off** — the FPM is gone, and the
+**DWARF** (the standard debug format on Unix-family systems) — a compact
+encoding representing types, source locations, and variable locations —
+carried in the object file alongside the code. Crucially, debug info is pure
+*metadata* — it must never change what the program computes. It also explains
+a tradeoff every `-O2 -g` user has felt: debug info is a hard problem mostly
+because of *optimized* code. LLVM keeps the original source location of each
+IR instruction on the instruction itself, and passes are supposed to
+preserve them — but when instructions get *merged*, the result can keep only
+one location, which is why stepping through optimized code jumps around. And
+optimization moves variables: optimized out entirely, sharing memory with
+other variables, or otherwise hard to track. Which is exactly why this
+chapter **turns the Chapter 4 optimizer off** — the FPM is gone, and the
 dumped IR suddenly shows raw allocas and loads again.
 
 **Debug info in LLVM: metadata + DIBuilder.** LLVM carries the map inside
@@ -39,14 +45,19 @@ translates it all into DWARF when emitting object code:
                                          DWARF in the object file → debugger
 ```
 
-One driver consequence up front: a REPL has no meaningful "source file", so
-the chapter finishes turning `toy` into a plain **batch compiler** — prompts
-removed, per-definition IR printing removed, the anonymous top-level function
-renamed `__anon_expr` → **`main`**, and the whole module (code + metadata)
-printed once at exit. That dump is valid LLVM assembly, so
+One driver consequence up front, with upstream's own caveat: **for now we
+can't debug via the JIT**, so the program must become something small and
+standalone that a debugger can load. The chapter therefore finishes turning
+`toy` into a plain **ahead-of-time batch compiler** — prompts removed,
+per-definition IR printing removed, the anonymous top-level function renamed
+`__anon_expr` → **`main`**, and the whole module (code + metadata) printed
+once at exit. That dump is valid LLVM assembly, so
 `toy < fib.ks 2>&1 | clang -x ir -` produces a debuggable native executable.
 (The JIT object returns from its Chapter 8 exile for exactly one duty:
-supplying a data layout.)
+supplying a data layout.) Upstream also notes the accepted limitation: only
+**one top-level command per program**, to keep the changes small — every
+top-level expression becomes a `main`, so a second one would collide with
+the first.
 
 Reference: [Chapter 9: Adding Debug Information](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl09.html).
 Language features are frozen at [Chapter7](../Chapter7/README.md)'s state.
@@ -85,13 +96,18 @@ via constructor (`VariableExprAST`, `CallExprAST`, `BinaryExprAST`,
 indenting AST pretty-printer that prints each node with its `line:col`
 (useful for debugging the compiler rather than the program).
 
-One deviation from upstream to know about: upstream declares
-`ExprAST(SourceLocation Loc = CurLoc)` — the default argument reads the
-*global lexer position*, so every node gets a real location. Here the
-default is `{0, 0}`, so nodes not explicitly given a location (numbers,
-unary/for/var expressions) emit `DILocation(line: 0, ...)` — visible in the
-module dump below. Debuggers treat line 0 as "no source line", so stepping
-still works, just with coarser granularity on those constructs.
+The nodes *without* an explicit location parameter (numbers, unary/for/var
+expressions) are not locationless: as upstream does, the base-class default
+argument reads the global lexer position at construction time —
+`ExprAST(SourceLocation Loc = CurLoc)` — so every node carries a real
+location. This default matters more than it looks: every `codegen()`
+re-aims the builder at its own location *before* emitting, and a parent's
+instruction is created *after* its children run — in `x < 3` the last
+re-aim before the `fcmp` is the `NumberExprAST` for `3`, so the `fcmp`
+inherits *that* node's location. With the `CurLoc` default every such
+inherited location is a real line:column; if the default were `{0, 0}`
+instead, comparisons, calls, and arithmetic would all land on line 0 and
+line-stepping in a debugger would go coarse.
 
 ## The DIBuilder setup
 
@@ -107,24 +123,48 @@ still works, just with coarser granularity on those constructs.
     if (llvm::Triple(llvm::sys::getProcessTriple()).isOSDarwin())
       ctx.theModule->addModuleFlag(llvm::Module::Warning, "Dwarf Version", 2);
 
+    // Construct the DIBuilder, we do this here because we need the module.
     DBuilder = std::make_unique<llvm::DIBuilder>(*ctx.theModule);
 
+    // Create the compile unit for the module.
+    // Currently down as "fib.ks" as a filename since we're redirecting stdin
+    // but we'd like actual source locations.
     KSDbgInfo.TheCU = DBuilder->createCompileUnit(
       llvm::dwarf::DW_LANG_C, DBuilder->createFile("fib.ks", "."),
       "Kaleidoscope Compiler", false, "", 0);
 
+    // Run the main "interpreter loop" now.
     parser.mainLoop();
 
-    DBuilder->finalize();                       // required before dumping
+    // Finalize the debug info.
+    DBuilder->finalize();
+
+    // Print out all of the generated code.
     ctx.theModule->print(llvm::errs(), nullptr);
 ```
 
-Details: the compile unit claims language `DW_LANG_C` so debuggers apply
-their C defaults (Kaleidoscope isn't on DWARF's language list); the filename
-is hardcoded `"fib.ks"` since stdin has no name; and `finalize()` must run
-before output — `DIBuilder` defers constructing some metadata cycles until
-then. The `KSDbgInfo` struct (in `debug.h`) is the chapter's little state
-bundle: the compile unit, a cached `DIType` for double
+`DIBuilder` is to debug metadata what `IRBuilder` is to instructions — a 1:1
+correspondence with the IR, "but with nicer names". Upstream's honest note:
+using it demands more DWARF-terminology fluency than `IRBuilder` demanded
+instruction fluency; the [Metadata Format
+docs](https://llvm.org/docs/SourceLevelDebugging.html) fill that in. It is
+constructed *from the module* (metadata lives inside the module), so it must
+be created right after the module — and, like upstream, `DBuilder` and
+`KSDbgInfo` are file-scope globals ("to make it a bit easier to use", in
+`src/debug.cpp`, `extern`'d where needed).
+
+Details: the **compile unit** is DWARF's top-level container — the type and
+function data for one translation unit, i.e. one source file. It claims
+language `DW_LANG_C`, and not out of laziness: a debugger can't know the
+calling conventions or ABI of a language it has never heard of, and since
+Kaleidoscope's codegen follows the C ABI anyway, claiming C is the closest
+thing to accurate — it's what lets you *call* `fib(5)` from the debugger
+prompt and have it execute. The filename is hardcoded `"fib.ks"` because the
+source arrives by shell redirection and stdin has no name (a real front end
+would put its input filename here). And `finalize()` must run before output
+— `DIBuilder` defers constructing some metadata cycles until then. The
+`KSDbgInfo` struct (in `debug.h`) is the chapter's little state bundle: the
+compile unit, a cached `DIType` for double
 (`createBasicType("double", 64, DW_ATE_float)`), and a stack of lexical
 scopes.
 
@@ -135,13 +175,20 @@ code:
 
 **`Chapter9/src/codegen.cpp`**
 ```cpp
+  // Create a subprogram DIE for this function.
+  llvm::DIFile *Unit = DBuilder->createFile(KSDbgInfo.TheCU->getFilename(),
+                                      KSDbgInfo.TheCU->getDirectory());
+  llvm::DIScope *FContext = Unit;
+  unsigned LineNo = P.getLine();
+  unsigned ScopeLine = LineNo;
   llvm::DISubprogram *SP = DBuilder->createFunction(
       FContext, P.getName(), llvm::StringRef(), Unit, LineNo,
       CreateFunctionType(TheFunction->arg_size()), ScopeLine,
       llvm::DINode::FlagPrototyped, llvm::DISubprogram::SPFlagDefinition);
   TheFunction->setSubprogram(SP);
 
-  KSDbgInfo.LexicalBlocks.push_back(SP);   // enter the function's scope
+  // Push the current scope.
+  KSDbgInfo.LexicalBlocks.push_back(SP);
 
   // Unset the location for the prologue emission (leading instructions with no
   // location in a function are considered part of the prologue and the debugger
@@ -149,7 +196,13 @@ code:
   KSDbgInfo.emitLocation(nullptr, ctx);
 ```
 
-Three ideas in those lines:
+The context comes first: a `DIFile` (asked from the compile unit for the
+current directory and filename) serves as the subprogram's scope. Upstream's
+§9.6 prose passes `LineNo = 0` at this point in the chapter's story — "since
+our AST doesn't currently have source location information" *yet* — and
+upgrades it once §9.7 adds locations; this code (like upstream's final
+listing) is the upgraded form, `P.getLine()` from the prototype's real
+position. Three more ideas in those lines:
 
 - **`CreateFunctionType(n)`** builds the `DISubroutineType` — in a
   one-type language that's just "double, n+1 times" (result + args).
@@ -176,9 +229,13 @@ its alloca — this is what lets the debugger `print x`:
                             ctx.builder->GetInsertBlock());
 ```
 
-(In the dump this appears as `#dbg_declare(ptr %x1, ...)` — modern LLVM's
-"debug record" syntax, replacing the older `call void @llvm.dbg.declare`
-intrinsic form the tutorial text shows.)
+The `createParameterVariable` call gives the variable its scope (`SP`),
+name, source location, type, and — since it is a parameter — its argument
+index; `insertDeclare` then plants a **`#dbg_declare` record** in the IR
+saying "this variable lives in that alloca", stamped with a location for the
+beginning of the scope. (`#dbg_declare` is modern LLVM's "debug record"
+syntax; older LLVM printed the same thing as a
+`call void @llvm.dbg.declare` intrinsic.)
 
 Finally, `KSDbgInfo.emitLocation(this, ctx)` is sprinkled at the top of
 every expression `codegen()` — it points the builder at the node's
@@ -190,12 +247,22 @@ until the location changes:
 void DebugInfo::emitLocation(ExprAST *AST, IRGenContext &ctx) {
   if (!AST)
     return ctx.builder->SetCurrentDebugLocation(llvm::DebugLoc());
-  llvm::DIScope *Scope = LexicalBlocks.empty() ? (llvm::DIScope*)TheCU
-                                               : LexicalBlocks.back();
+  llvm::DIScope *Scope;
+  if (LexicalBlocks.empty())
+    Scope = TheCU;
+  else
+    Scope = LexicalBlocks.back();
   ctx.builder->SetCurrentDebugLocation(llvm::DILocation::get(
       Scope->getContext(), AST->getLine(), AST->getCol(), Scope));
 }
 ```
+
+The scope for a location is the innermost entry of the `LexicalBlocks`
+stack, falling back to the compile unit outside any function. And the
+prologue trick is a two-step: after the null location suppresses line info
+for the argument setup, `FunctionAST::codegen` re-arms the builder with
+`KSDbgInfo.emitLocation(Body.get(), ctx)` right before generating the body,
+so the first *user* instruction is where the debugger lands.
 
 ## File-by-file: What changed from Chapter8
 
@@ -263,7 +330,22 @@ registration remains, with a comment giving the rationale.
 
 ## Build and run
 
-`./build.sh`, then `./run.sh`. The dumped IR for `fib.ks` — unoptimized
+`./build.sh`, then `./run.sh`. The chapter's sample program — upstream's
+fibonacci, one function definition plus the single top-level command that
+becomes `main`:
+
+**`Chapter9/example/fib.ks`**
+```
+def fib(x)
+  if x < 3 then
+    1
+  else
+    fib(x-1)+fib(x-2);
+
+fib(10)
+```
+
+The dumped IR for it — unoptimized
 again (allocas are back!), with `!dbg` on nearly every instruction:
 
 ```
@@ -283,11 +365,13 @@ entry:
 !4 = distinct !DISubprogram(name: "fib", scope: !3, file: !3, line: 1, ...)
 !9 = !DILocalVariable(name: "x", arg: 1, scope: !4, file: !3, line: 1, type: !7)
 !11 = !DILocation(line: 2, column: 6, scope: !4)
+!12 = !DILocation(line: 2, column: 10, scope: !4)
 ```
 
 Note the metadata graph at the bottom mirroring the source: compile unit →
-subprogram `fib` → parameter `x` → per-instruction locations (and the
-`line: 0` entries from the default-location deviation noted above). Piping
+subprogram `fib` → parameter `x` → per-instruction locations, every one a
+real line:column thanks to the `CurLoc` default (the `fcmp`'s `!12` is the
+`3` literal's position — the inherited-location effect described above). Piping
 this through `clang -x ir -` yields a native `a.out` you can open in lldb:
 `b fib`, `run`, `print x`.
 
@@ -323,6 +407,12 @@ makes this one test also the end-to-end regression test for
 `errors.k` carries the error-recovery contract into the batch-compiler era:
 errors are reported, parsing continues, and the surviving `def good`
 appears in the final module dump.
+
+`toplevel-limit.k` pins the one-top-level-command limitation described in
+the intro: a second top-level expression is not rejected — with no
+redefinition guard (dropped in Chapter4, faithful to upstream), its body is
+appended to the existing `main()` as a dead `entry1` block. The test exists
+so that any change in this behavior is noticed, not to bless it.
 
 ```sh
 ctest --test-dir build                 # just the filecheck tests now

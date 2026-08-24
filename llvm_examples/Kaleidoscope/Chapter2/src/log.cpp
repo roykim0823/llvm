@@ -13,10 +13,4 @@ std::unique_ptr<PrototypeAST> logErrorP(const char* str) {
     logError(str);
     return nullptr;
 }
-
-
-llvm::Value *logErrorV(const char *str) {
-  logError(str);
-  return nullptr;
-}
 }

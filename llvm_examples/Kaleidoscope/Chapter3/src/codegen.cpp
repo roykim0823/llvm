@@ -97,6 +97,9 @@ llvm::Function *FunctionAST::codegen(IRGenContext &ctx) {
   if (!TheFunction)
     return nullptr;
 
+  if (!TheFunction->empty())
+    return (llvm::Function *)logErrorV("Function cannot be redefined.");
+
   // Create a new basic block to start insertion into.
   llvm::BasicBlock *BB = llvm::BasicBlock::Create(*ctx.theContext, "entry", TheFunction);
   ctx.builder->SetInsertPoint(BB);

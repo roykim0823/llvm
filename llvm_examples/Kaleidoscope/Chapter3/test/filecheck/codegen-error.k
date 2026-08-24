@@ -9,3 +9,9 @@ unknownfn(1.0);
 
 def good(x) x;
 # CHECK: define double @good(double %x)
+
+def good(x) x+1;
+# CHECK: Error: Function cannot be redefined.
+
+def stillgoing(x) x;
+# CHECK: define double @stillgoing(double %x)

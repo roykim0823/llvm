@@ -18,12 +18,16 @@ struct DebugInfo {
 
   void emitLocation(ExprAST *AST, IRGenContext &ctx);
   llvm::DIType *getDoubleTy();
-};// KSDbgInfo;
+};
 
 struct SourceLocation {
   int Line;
   int Col;
 };
+
+// Location of the token the parser is currently looking at; defined in
+// lexer.cpp, defaulted into every ExprAST at construction (as upstream does).
+extern SourceLocation CurLoc;
 
 class DebugInfoManager {
     public:

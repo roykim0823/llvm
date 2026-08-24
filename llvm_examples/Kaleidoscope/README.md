@@ -129,7 +129,9 @@ Notes that apply everywhere:
 
 - The CMake files pin `CMAKE_OSX_DEPLOYMENT_TARGET` to the **host** macOS
   release (via `sw_vers`) so the objects agree with the Homebrew LLVM
-  libraries.
+  libraries. Exception: Chapter2 links no LLVM at all — like upstream's
+  Chapter 2 it is a pure C++ frontend — so it skips both the LLVM lookup
+  and the pin (LLVM enters in Chapter3 with codegen).
 - Chapters 2–7 are REPLs reading stdin. When input is **piped** instead of
   typed, the output interleaves extra `ready>` prompts (the prompt prints
   before each read, and nothing echoes the input) — the READMEs' example

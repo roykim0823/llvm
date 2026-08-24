@@ -39,7 +39,7 @@ llvm::raw_ostream &indent(llvm::raw_ostream &O, int size);
 class ExprAST {
   SourceLocation Loc;
 public:
-  ExprAST(SourceLocation Loc= SourceLocation{0, 0}) : Loc(Loc) {}  // Ch9
+  ExprAST(SourceLocation Loc = CurLoc) : Loc(Loc) {}  // Ch9
   virtual ~ExprAST() = default;
 
   // Use a simple virtual method for code generation instead of common visitor pattern

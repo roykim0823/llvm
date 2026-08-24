@@ -103,7 +103,9 @@ Required shape (learned from review of Chapter2):
 
 - Build: `cmake -B build -G Ninja -S . && cmake --build build` (or
   `./build.sh`, which also pipes `cmd.txt` through the binary). LLVM via
-  Homebrew, linked per-chapter via `llvm_map_components_to_libnames`.
+  Homebrew, linked per-chapter via `llvm_map_components_to_libnames` —
+  except Chapter2, which (like upstream's Chapter 2) has no LLVM build
+  dependency at all: no `find_package(LLVM)`, no deployment-target pin.
 - gtest unit tests fetched via FetchContent; binaries like `./build/lexer_test`.
 - lit/FileCheck: `test/filecheck/*.k` with `RUN:` lines; ctest registers a
   `filecheck` test that sets `TOY_BIN=$<TARGET_FILE:toy>` and

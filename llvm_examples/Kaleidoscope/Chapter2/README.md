@@ -97,7 +97,7 @@ stage: no code generation yet; the driver just reports what it parsed.
 | `include/lexer.h`, `src/lexer.cpp` | The `Token` enum and the `Lexer` class: `gettok()` plus the token's side data. Upstream's globals `IdentifierStr`/`NumVal` became the members `identifierStr`/`numVal`, and `gettok()`'s `static int LastChar` local became the member `lastChar`. |
 | `include/ast.h` | The AST: `ExprAST` base class with `NumberExprAST`, `VariableExprAST`, `BinaryExprAST`, `CallExprAST`, plus `PrototypeAST` and `FunctionAST` — upstream's classes unchanged, moved from an anonymous namespace into `namespace toy`. Header-only — the nodes are pure data at this stage. |
 | `include/parser.h`, `src/parser.cpp` | The `Parser` class: upstream's free `Parse*`/`Handle*` functions and `MainLoop()` became the `parse*`/`handle*` methods and `mainLoop()`; the globals `CurTok` and `BinopPrecedence` became the members `curTok` and `binopPrecedence` (the table now filled in the constructor rather than in `main()`). |
-| `include/log.h`, `src/log.cpp` | Error helpers `logError`/`logErrorP` — upstream's `LogError`/`LogErrorP` free functions (plus `logErrorV`, declared ahead of the codegen chapters). They print to stderr and return `nullptr`, so a failed parse propagates up as a null pointer. |
+| `include/log.h`, `src/log.cpp` | Error helpers `logError`/`logErrorP` — upstream's `LogError`/`LogErrorP` free functions. They print to stderr and return `nullptr`, so a failed parse propagates up as a null pointer. |
 | `src/main.cpp` | `main()`: constructs a `Lexer` and a `Parser`, then runs `parser.mainLoop()` — upstream's `main()` minus the precedence-table setup and the token priming, both of which moved into the `Parser` (see the deviation subsections). |
 
 ## Chapter 1: The Lexer
@@ -1083,8 +1083,12 @@ Chapter 3.
 
 Requirements and the other generic build facts (LLVM via Homebrew, CMake ≥
 3.20 with Ninja, the deployment-target pin) are in the top-level README's
-[Build and run](../README.md#build-and-run). Chapter-specific: only the
-`core` LLVM component is linked.
+[Build and run](../README.md#build-and-run). Chapter-specific: **no LLVM is
+linked at all** — like upstream's Chapter 2 `toy.cpp`, this directory is a
+pure C++ frontend, so its CMake file also skips the LLVM lookup and the
+deployment-target pin (LLVM first appears in Chapter3 with codegen; the lit
+tests still find FileCheck through `llvm-config`, but that is test tooling,
+not a build dependency).
 
 ```sh
 ./build.sh            # clean configure + build, then runs ./build/toy < cmd.txt

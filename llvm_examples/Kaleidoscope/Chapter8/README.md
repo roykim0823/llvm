@@ -24,9 +24,14 @@ stages:
 
 **Targets, triples, and the TargetMachine.** Native code generation must
 know *which machine* — instruction set, calling convention, type
-sizes/alignment. LLVM identifies a target with a **target triple**,
-`<arch>-<vendor>-<os>-<abi>` (e.g. `arm64-apple-darwin25.1.0` on this
-machine, from `sys::getDefaultTargetTriple()`). The triple selects a backend in the
+sizes/alignment. LLVM identifies a target with a **target triple** of the
+form `<arch><sub>-<vendor>-<sys>-<abi>` (see LLVM's
+[cross-compilation guide](https://clang.llvm.org/docs/CrossCompilation.html)).
+`clang --version | grep Target` shows the host's triple — upstream sees
+`x86_64-unknown-linux-gnu`, this machine says `arm64-apple-darwin25.5.0`,
+yours may differ again — and `sys::getDefaultTargetTriple()` returns the
+same answer programmatically, so nothing has to be hard-coded to target the
+current machine. The triple selects a backend in the
 `TargetRegistry`, which builds a **`TargetMachine`** — the object that owns
 everything target-specific, including the **`DataLayout`** stamped onto the
 module so the mid-level IR agrees with the backend about sizes and
@@ -111,14 +116,21 @@ int compile_obj(toy::IRGenContext& ctx) {
 
 Walking the choices:
 
-- **`CPU = "generic"`, empty features** — don't assume any particular chip
-  revision or SIMD extension; `llc -mcpu=help` lists what could go here.
+- **`CPU = "generic"`, empty features** — these are the two knobs for
+  targeting a specific CPU (upstream's example: Intel's Sandylake) or
+  feature set (such as SSE); `generic` with no features assumes neither.
+  Upstream's way to browse the choices:
+  `llvm-as < /dev/null | llc -march=x86 -mattr=help` prints every CPU and
+  every feature LLVM knows for a target (`llc -mcpu=help` also works).
 - **`Reloc::PIC_`** — position-independent code, required to link into
   modern executables/shared libraries on macOS and most Linux setups.
 - **`setDataLayout` / `setTargetTriple` on the module** — in the JIT
   chapters the *JIT's* layout was stamped on each module; now the
   TargetMachine's is. Same principle: IR-level decisions (alignment,
-  struct layout) must match the machine that will run the code.
+  struct layout) must match the machine that will run the code. Upstream
+  notes this configuration isn't strictly necessary for emission to work,
+  but the frontend performance guide recommends it: optimizations benefit
+  from knowing the target and data layout.
 - **`legacy::PassManager`** — a deliberate anachronism: the *optimization*
   pipeline moved to the new pass manager (Chapter 4), but LLVM's **code
   generation** still runs on the legacy interface, so
@@ -128,11 +140,36 @@ Walking the choices:
 - **`CodeGenFileType::ObjectFile`** — switching this to `AssemblyFile`
   would emit `.s` text instead; same pipeline, different final writer.
 
-One deviation from upstream: the tutorial calls the five
-`InitializeAll*` functions (every backend LLVM was built with, so any triple
-works), while this refactor keeps the three `InitializeNativeTarget*` calls
-from the JIT chapters — host-only, smaller link, but `lookupTarget` would
-fail for a non-native triple.
+### Deviation from upstream: Native-only target initialization
+
+Upstream initializes every backend LLVM was built with, so that *any* triple
+works:
+
+```cpp
+// upstream (LangImpl08)
+InitializeAllTargetInfos();
+InitializeAllTargets();
+InitializeAllTargetMCs();
+InitializeAllAsmParsers();
+InitializeAllAsmPrinters();
+```
+
+— which is also why its build line changes to `llvm-config --libs all`
+("note that the arguments to llvm-config are different to the previous
+chapters"). This refactor instead keeps the three `InitializeNativeTarget*`
+calls unchanged from the JIT chapters (`src/main.cpp`), so
+`CMakeLists.txt` stays byte-identical to Chapter7's
+(`core orcjit native` — `orcjit` is now linked but unused). The doc's own
+rationale cuts both ways: LLVM doesn't require linking in all target
+functionality — a JIT needs no assembly printers, and a compiler targeting
+only some architectures links only those.
+
+|                            | upstream                        | refactored                                  |
+| -------------------------- | ------------------------------- | ------------------------------------------- |
+| initialized backends       | every one LLVM was built with   | host architecture only                      |
+| link requirement           | `llvm-config --libs all`        | unchanged from Chapter7 (`core orcjit native`) |
+| `lookupTarget(<non-native>)` | succeeds → cross-compile      | fails (prints the `lookupTarget` error)     |
+| link time / binary size    | slower / larger                 | faster / smaller                            |
 
 ## The payoff: Calling Kaleidoscope from C++
 
@@ -152,18 +189,23 @@ int main() {
 }
 ```
 
-`./run.sh` performs the whole classic pipeline; a real session:
+`./run.sh` performs the whole classic pipeline; a real session (typed
+interactively — upstream's `^D` ends the input; piped through
+`< example/average.txt`, the same output appears with the prompts bunched
+up, as noted in the [top-level README](../README.md#build-and-run)):
 
 ```
-$ ./build/toy < example/average.txt
+$ ./build/toy
 ready> def average(x y) (x+y) * 0.5;
-Read function definition:
+ready> Read function definition:
 define double @average(double %x, double %y) {
 entry:
   %addtmp = fadd double %x, %y
   %multmp = fmul double %addtmp, 5.000000e-01
   ret double %multmp
 }
+
+ready> ^D
 ready> Wrote output.o
 
 $ nm -g output.o

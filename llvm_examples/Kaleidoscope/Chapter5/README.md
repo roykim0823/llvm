@@ -34,12 +34,14 @@ same name twice. The **`phi` instruction** is SSA's answer: placed at a merge
 block, it yields a different value *depending on which predecessor block
 control arrived from* — `phi [A, then], [B, else]`. The same trick gives a
 loop its induction variable: `i = phi [start, entry], [i+step, loop]` — one
-instruction, two incoming edges, no mutation. Building optimal SSA form is
-normally a compiler's job (dominance frontiers etc.); this chapter sidesteps
-all of it because Kaleidoscope has no mutable variables — the *only* merge
-points are these two constructs, so the codegen just emits the phis directly.
-(Chapter 7 shows the lazier industry-standard route: stack slots + the
-`mem2reg` pass.)
+instruction, two incoming edges, no mutation. Does a frontend therefore have
+to *construct* SSA form (dominance frontiers etc.)? Upstream's advice is a
+firm no. Phi-needing values come in two kinds: (1) user variables
+(`x = 1; x = x + 1;`) and (2) values implicit in the structure of the AST,
+like these merges. For kind 1, Chapter 7 shows the industry-standard route
+that avoids SSA construction entirely (stack slots + the `mem2reg` pass);
+for kind 2 you can use the same trick *or* place the phis directly when
+that's easy — and here it is, so this chapter's codegen emits them directly.
 
 Everything else — one type, JIT, optimizer — is as in
 [Chapter4](../Chapter4/README.md); parser/AST basics in
@@ -47,9 +49,30 @@ Everything else — one type, JIT, optimizer — is as in
 [Chapter3](../Chapter3/README.md).
 Reference: [Chapter 5: Extending the Language — Control Flow](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl05.html).
 
+Upstream opens with the "what we want": with branching, recursion finally
+has a base case, so this is the chapter where the classic functions become
+writable —
+
+```
+def fib(x)
+  if x < 3 then
+    1
+  else
+    fib(x-1)+fib(x-2);
+```
+
+Two semantic points the tutorial nails down before building anything. The
+condition is evaluated to a boolean by comparison against `0.0`: zero is
+false, *everything else* is true. And only the **taken** arm is evaluated —
+observable behavior, since Kaleidoscope expressions can have side effects
+(calls); this is a real conditional, not a "compute both and pick one"
+select.
+
 The additions cut through every layer, and each one is textbook mechanics by
 now — new keywords in the lexer, new AST nodes, new productions in
-`parsePrimary()`, new `codegen()` overrides:
+`parsePrimary()`, new `codegen()` overrides. Upstream's point in walking all
+four layers again is how cheaply a language *grows* once the pipeline
+exists:
 
 ```
   lexer.h/.cpp     ast.h            parser.h/.cpp        codegen.cpp
@@ -140,6 +163,7 @@ llvm::Value *IfExprAST::codegen(IRGenContext &ctx) {
   if (!ElseV)
     return nullptr;
   ctx.builder->CreateBr(MergeBB);
+  // Codegen of 'Else' can change the current block, update ElseBB for the PHI.
   ElseBB = ctx.builder->GetInsertBlock();
 
   // Emit merge block.
@@ -156,6 +180,15 @@ The mechanics worth slowing down for:
 
 - **Truthiness**: Kaleidoscope has no bool, so the condition is `fcmp one`
   ("ordered, not-equal") against `0.0` — any non-zero value is true.
+- **Finding the function to build into.**
+  `ctx.builder->GetInsertBlock()->getParent()` asks the builder for the
+  current block, then asks the block for its "parent" — the function it is
+  embedded in. New blocks need a function to (eventually) live in.
+- **Every block must end in a terminator.** LLVM requires each basic block
+  to be terminated by a control-flow instruction (`br`, `ret`, ...) — all
+  control flow, *including fall-throughs*, is explicit in the IR, and the
+  verifier reports an error otherwise. That is why both arms end with an
+  explicit `CreateBr(MergeBB)`.
 - **The builder is a cursor, and recursion moves it.** After
   `Then->codegen(ctx)` returns, the "current block" may be some deep
   `ifcont` block of a *nested* if — not the `then` block we created. Two
@@ -167,7 +200,12 @@ The mechanics worth slowing down for:
 - **Deferred block insertion.** `ElseBB` and `MergeBB` are created without a
   parent and appended (`TheFunction->insert`) only when their turn comes, so
   the blocks appear in the function in roughly source order even after
-  nested codegen appended blocks of its own.
+  nested codegen appended blocks of its own. Two related facts the tutorial
+  calls out: creating blocks never moves the builder (it keeps inserting
+  where the condition went until `SetInsertPoint` says otherwise), and
+  `CreateCondBr` may happily target `ElseBB` while it is still parentless —
+  branching to a not-yet-inserted block is LLVM's standard way of supporting
+  forward references.
 - **The phi is the return value.** The whole construct evaluates to `PN` —
   from the outside, an if-expression is just one more `Value*`.
 
@@ -236,11 +274,16 @@ The notable moves:
   immediately, but the backedge entry (`NextVar` from `LoopEndBB`) can only
   be added *after* the body is generated — the value and the predecessor
   block don't exist yet. Temporarily-incomplete phis are fine as long as
-  they're complete before verification.
+  they're complete before verification. And `LoopEndBB` is re-read from the
+  builder for the same reason as the if's `ThenBB`: the body is an arbitrary
+  expression that may itself contain an if or a for, so the block the
+  backedge leaves from can be deeper than `loop:`.
 - **The loop variable is scoped by shadow-and-restore.** `namedValues` is a
   flat map, so nesting is handled manually: save whatever `VarName` mapped to
   (an argument, or an outer loop's variable), overwrite it with the phi, and
-  restore/erase on the way out. This two-line idiom is the entire "scoping
+  restore/erase on the way out. Upstream notes the alternative — erroring
+  when the name already exists — and deliberately chooses to allow
+  shadowing. This two-line idiom is the entire "scoping
   story" until Chapter 7 brings real mutable variables.
 - **Execution order is: body → step → end-condition.** The condition is
   tested *after* the body, against the **pre-increment** variable — do-while
@@ -251,7 +294,9 @@ The notable moves:
   with `i = n` before exiting. The body executes for `i = 1 .. n`, n times;
   concretely, `printstar(10)` below prints **10** stars.
 - **A for-expression always evaluates to `0.0`** (`Constant::getNullValue`) —
-  it is used for its side effects.
+  it is used for its side effects, there being "nothing better to return";
+  upstream notes loops get more useful once Chapter 7 adds mutable
+  variables.
 
 ## Real output at last: `putchard` and `extern_d.cpp`
 
@@ -284,7 +329,10 @@ can see them.
 
 The directory also gains a tiny helper, `view_cfg/`: `run.sh` pipes an `.ll`
 file through `opt -passes=view-cfg` to render a function's CFG with Graphviz
-— handy for actually *seeing* the diamond and the loop backedge.
+— handy for actually *seeing* the diamond and the loop backedge. (The
+in-code equivalent upstream mentions: call `F->viewCFG()` or
+`F->viewCFGOnly()` on a `Function*`, either from inserted code or from a
+debugger.)
 
 ## File-by-file: What changed from Chapter4
 
@@ -434,6 +482,23 @@ entry:
 
 Ten stars: the end condition runs after the body with the pre-increment `i`,
 so the body executes for `i = 1..10`.
+
+And the chapter's marquee payoff — recursion now has a base case, so the
+intro's `fib` runs for real (IR dumps elided):
+
+```
+ready> def fib(x)
+  if x < 3 then
+    1
+  else
+    fib(x-1)+fib(x-2);
+Read function definition:
+...
+ready> fib(10);
+Read top-level expression:
+...
+Evaluated to 55.000000
+```
 
 ## Tests
 

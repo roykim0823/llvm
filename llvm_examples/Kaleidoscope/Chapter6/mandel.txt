@@ -37,7 +37,7 @@ def binary= 9 (LHS RHS)
 # and just returns the RHS.
 def binary: 1 (x y) y;
 
-extern putchard(chard);
+extern putchard(char);
 
 def printdensity(d)
   if d > 8 then

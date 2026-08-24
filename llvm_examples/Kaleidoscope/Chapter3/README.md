@@ -1,8 +1,5 @@
 # Chapter 3 — Code Generation to LLVM IR
 
-This chapter turns the AST from [Chapter2](../Chapter2/README.md) into
-**LLVM IR**. Two general compiler concepts first:
-
 **Code generation** is the phase that translates the structured program the
 frontend built (the AST) into a lower-level language. The frontend stages
 were about *understanding* the input — characters into tokens, tokens into a
@@ -58,8 +55,11 @@ translation:
 ```
 
 Reference: [Chapter 3: Code generation to LLVM IR](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl03.html).
-The lexer and parser are unchanged from Chapter2 (see its README for those);
-this README covers only what Chapter 3 adds.
+(Upstream opens with two notes: building the lexer and parser was much more
+work than generating IR will be, and its code needs LLVM ≥ 3.7 — the version
+caveat is long subsumed by this repo's Homebrew-LLVM requirement.)
+The lexer and parser are unchanged from [Chapter2](../Chapter2/README.md)
+(see its README for those); this README covers only what Chapter 3 adds.
 
 The pipeline gains one stage after the parser. The parser now holds an
 `IRGenContext&` and, instead of just reporting "Parsed a ...", each `handle*`
@@ -96,6 +96,99 @@ resetting globals).
 are byte-identical, which changed and how — is in
 [File-by-file](#file-by-file-what-changed-from-chapter2) near the end.)
 
+## Code generation setup: The `codegen()` methods
+
+Before any IR can be emitted, every AST node gets a code-generation entry
+point — a pure-virtual `codegen()` on `ExprAST` that each concrete node
+overrides (declarations only; all the bodies live in `src/codegen.cpp`):
+
+**`Chapter3/include/ast.h`**
+```cpp
+/// ExprAST - Base class for all expression nodes.
+class ExprAST {
+public:
+  virtual ~ExprAST() = default;
+
+  // Use a simple virtual method for code generation instead of common visitor pattern
+  virtual llvm::Value *codegen(IRGenContext &ctx) = 0;
+};
+
+/// NumberExprAST - Expression class for numeric literals like "1.0".
+class NumberExprAST : public ExprAST {
+  double Val;
+
+public:
+  NumberExprAST(double Val) : Val(Val) {}
+
+  llvm::Value *codegen(IRGenContext &ctx) override;
+};
+// ... VariableExprAST, BinaryExprAST, CallExprAST declare the same override;
+// PrototypeAST and FunctionAST return llvm::Function* instead (see below).
+```
+
+The contract: `codegen()` emits the IR for this node *and everything it
+depends on*, and returns the resulting `llvm::Value*`. `Value` is LLVM's
+class for an **SSA value** — the result of one instruction (or a constant,
+or a function argument). Its defining property is that it is assigned by
+exactly the instruction that computes it and can never be reassigned — there
+is no way to "change" an SSA value. This is the "infinitely many registers,
+each written once" model from the intro, seen from the C++ API side: a
+`Value*` in hand *is* dataflow, not storage.
+
+Two notes on the shape of this API:
+
+- **Virtual method, not visitor.** As the header comment says, dispatch is a
+  plain virtual method rather than the visitor pattern a production compiler
+  might use — upstream makes the same choice with the same shrug ("this
+  tutorial won't dwell on good software engineering practices; adding a
+  virtual method is simplest").
+- **The `IRGenContext&` parameter is the refactor.** Upstream's signature is
+  `virtual Value *codegen() = 0;` — no parameters, because the emission
+  machinery lives in four file-scope statics. Here that machinery is the
+  `IRGenContext` described next, and every `codegen()` receives it
+  explicitly (the globals→class bundling from the intro, landing in code).
+
+Codegen also extends the parser's error convention. Upstream introduces the
+codegen state and its error helper in a single block — "a 'LogError' method
+like we used for the parser, which will be used to report errors found during
+code generation (for example, use of an undeclared parameter)":
+
+**`Chapter3/src/log.cpp`**
+```cpp
+static std::unique_ptr<LLVMContext> TheContext;
+static std::unique_ptr<IRBuilder<>> Builder;
+static std::unique_ptr<Module> TheModule;
+static std::map<std::string, Value *> NamedValues;
+
+Value *LogErrorV(const char *Str) {
+  LogError(Str);
+  return nullptr;
+}
+```
+
+The four statics are the file-scope emission machinery just mentioned — they
+become the members of the `IRGenContext` described in the next section.
+`LogErrorV` becomes `logErrorV`, a third helper in `log.h` (new in this
+chapter) beside the parser's `logError`/`logErrorP`:
+
+**`Chapter3/src/log.cpp`**
+```cpp
+llvm::Value *logErrorV(const char *str) {
+  logError(str);
+  return nullptr;
+}
+```
+
+It prints `Error: ...` and returns a null `llvm::Value*`, so a
+code-generation failure bubbles up through the recursion exactly like a
+parse failure does.
+
+One assumption to keep in mind while reading the next section: expression
+`codegen()` never chooses *where* instructions go — it assumes `ctx.builder`
+is already aimed at a basic block. Setting that up is
+`FunctionAST::codegen()`'s job (it creates the `entry` block and calls
+`SetInsertPoint` before walking the body — see "Function code generation").
+
 ## The codegen state: `IRGenContext`
 
 **`Chapter3/include/ir_gen_ctx.h`**
@@ -117,20 +210,24 @@ public:
 
 What each member is for:
 
-- **`theContext`** — an opaque owner of core LLVM data structures, most
+- **`LLVMContext`** — an opaque owner of core LLVM data structures, most
   importantly the type and constant tables. This is why constants and types
   are *requested from* the context (`ConstantFP::get(*theContext, ...)`)
   rather than constructed: LLVM uniques them, so every `2.0` in the module is
   the same object.
-- **`theModule`** — the top-level IR container: all functions (and, later,
-  global variables) live in one module. It owns the memory of every `Value`
-  the codegen produces, which is why `codegen()` can return raw `Value*`.
-- **`builder`** — a cursor plus instruction factory. `SetInsertPoint(BB)`
+- **`Module`** — the top-level IR container: all functions and global variables
+  live in one module. It owns the memory of every `Value`
+  the codegen produces, which is why `codegen()` can return a raw `Value*`
+  rather than some owning `unique_ptr<Value>`.
+- **`IRBuilder`** — a helper object that makes it easy to generate LLVM instructions.
+  Instances of the IRBuilder class template keep track of the current place to insert
+  instructions and has methods to create new instructions. `SetInsertPoint(BB)`
   aims it at a basic block; every `CreateFAdd`/`CreateCall`/... appends one
   instruction there and returns it as a `Value*`.
 - **`namedValues`** — the symbol table. In this chapter the only named values
   are **function arguments**, so it is cleared and refilled on every
-  function; mutable variables arrive in Chapter 7.
+  function; loop induction variables join it in Chapter 5, and mutable local
+  variables in Chapter 7.
 
 ## Expression code generation
 
@@ -155,6 +252,12 @@ llvm::Value *VariableExprAST::codegen(IRGenContext &ctx) {
   return V;
 }
 ```
+
+A number becomes a `ConstantFP`, which stores the value in an `APFloat` —
+LLVM's arbitrary-precision float, hence the name. Note the API idiom:
+`ConstantFP::get(...)`, never `new ConstantFP(...)` — constants (like types)
+are uniqued and shared inside the `LLVMContext`, so code *requests* them
+rather than constructs them, as the `theContext` bullet above explained.
 
 Binary operators show the recursive pattern — children first, then one
 instruction combining them:
@@ -185,16 +288,22 @@ Three details worth knowing:
 - **The `"addtmp"` strings are only hints.** LLVM appends a numeric suffix on
   collision (`%multmp`, `%multmp1`, `%multmp2`, ...) — SSA requires unique
   names, the hint just keeps the IR readable.
-- **`<` needs two instructions** because LLVM is strictly typed: `fcmp`
-  produces an `i1` (one-bit bool), but Kaleidoscope's only type is `double`,
-  so `uitofp` converts the `i1` to `0.0`/`1.0`. (`ULT` = *unordered* less
-  than: it returns true if either operand is NaN — the cheap choice for a toy
+- **`<` needs two instructions** because LLVM's typing rules are strict: an
+  instruction's operand and result types must agree (which is also why
+  `fadd`/`fsub`/`fmul` are one-liners — everything is `double`), and `fcmp`
+  always produces an `i1` (one-bit bool). Kaleidoscope's only type being
+  `double`, `uitofp` converts the `i1` to `0.0`/`1.0`. It must be `uitofp`,
+  not `sitofp`: treating the one-bit value as *signed* would read `1` as
+  `-1`, making `<` return `0.0`/`-1.0`. (`ULT` = *unordered* less than: it
+  returns true if either operand is NaN — the cheap choice for a toy
   language.)
 - **`IRBuilder` constant-folds for free.** If both operands are constants,
   `CreateFAdd` returns a folded `ConstantFP` instead of emitting an
   instruction — type `4+5;` into the REPL and the "function" is just
   `ret double 9.0`. That's why the unit tests for `1.0 <op> 2.0` assert on a
-  folded constant, not on an instruction.
+  folded constant, not on an instruction. Apart from this folding the IR is
+  a literal transcription of the AST — explicit optimization passes arrive
+  in Chapter 4.
 
 Calls look the callee up **in the module** — the module's function table is
 effectively the symbol table for functions, which is also why an `extern`
@@ -209,7 +318,14 @@ llvm::Value *CallExprAST::codegen(IRGenContext &ctx) {
 
   if (CalleeF->arg_size() != Args.size())
     return logErrorV("Incorrect # arguments passed");
-  ...
+
+  std::vector<llvm::Value *> ArgsV;
+  for (unsigned i = 0, e = Args.size(); i != e; ++i) {
+    ArgsV.push_back(Args[i]->codegen(ctx));
+    if (!ArgsV.back())
+      return nullptr;
+  }
+  
   return ctx.builder->CreateCall(CalleeF, ArgsV, "calltmp");
 }
 ```
@@ -217,9 +333,20 @@ llvm::Value *CallExprAST::codegen(IRGenContext &ctx) {
 The arity check is the first *semantic* (not syntactic) error in the
 compiler: `foo(1)` for a two-argument `foo` parses fine and fails here.
 
+Two more things come for free. LLVM emits `call` with the **native C calling
+convention** by default, so the same mechanism reaches standard-library
+functions like `sin` and `cos` with no extra glue — that is the whole magic
+behind `extern sin(x);`. And the framework is easy to extend: the
+[LLVM language reference](https://llvm.org/docs/LangRef.html) is full of
+instructions that would plug into `BinaryExprAST::codegen`'s switch just as
+easily (upstream's suggested exercise).
+
 ## Function code generation
 
-`PrototypeAST::codegen()` creates the *declaration*: since every value is a
+Prototypes and functions involve more bookkeeping than expressions did —
+upstream half-apologizes for the "less beautiful" code — but every detail
+illustrates something. `PrototypeAST::codegen()` creates the *declaration*:
+since every value is a
 double, the function type is fully determined by the argument count —
 `double(double, double)` for two parameters. `ExternalLinkage` means the
 function is visible outside this module (callable from — and defined in — a
@@ -242,7 +369,21 @@ llvm::Function *PrototypeAST::codegen(IRGenContext &ctx) {
 }
 ```
 
-`FunctionAST::codegen()` fills in the *body*:
+Details worth noting: this `codegen()` returns `llvm::Function*`, not
+`Value*` — a prototype describes a function's *interface*, not a computed
+value. The `false` argument to `FunctionType::get` means *not vararg*.
+Passing `ctx.theModule.get()` as the last argument of `Function::Create`
+inserts the new function into the module and registers its name in the
+module's symbol table — the very table `CallExprAST::codegen` resolves
+callees against. And
+the final `setName` loop isn't strictly necessary (LLVM would invent names),
+but keeping the user's parameter names makes the IR readable and lets the
+body's codegen refer to arguments directly rather than consulting the
+prototype. The resulting `Function` is a declaration with no body — exactly
+LLVM's representation of an `extern`; for definitions, a body gets attached
+next.
+
+`FunctionAST::codegen()` fills in the *body*. In overview:
 
 ```
  lookup Proto name in module ──found (prior extern)──▶ reuse that Function
@@ -251,23 +392,98 @@ llvm::Function *PrototypeAST::codegen(IRGenContext &ctx) {
  Proto->codegen(ctx)  (create declaration)                   │
         └────────────────────────┬───────────────────────────┘
                                  ▼
+              already has a body? ──yes──▶ logErrorV("Function cannot be redefined.")
+                                 │ no
+                                 ▼
               create "entry" BasicBlock, SetInsertPoint
                                  ▼
               namedValues.clear(); insert each argument
                                  ▼
               Body->codegen(ctx) ──nullptr──▶ TheFunction->eraseFromParent()
-                                 │             (don't leave a bodiless stub)
+                                 │             (don't leave a broken stub)
                                  ▼
               builder->CreateRet(RetVal); verifyFunction(*TheFunction)
 ```
 
-The pieces in order: a **basic block** is a straight-line sequence of
-instructions with no branches into or out of the middle — with no control
-flow yet (that's Chapter 5), one `entry` block per function is the whole CFG.
-`verifyFunction()` is LLVM's consistency check on the generated IR — cheap
-insurance the tutorial recommends running always. And `eraseFromParent()` on
-error removes the half-built function so a later, corrected `def` can start
-clean.
+The full function, with the phases marked:
+
+**`Chapter3/src/codegen.cpp`**
+```cpp
+llvm::Function *FunctionAST::codegen(IRGenContext &ctx) {
+  // First, check for an existing function from a previous 'extern' declaration.
+  llvm::Function *TheFunction = ctx.theModule->getFunction(Proto->getName());   // [1]
+
+  if (!TheFunction)
+    TheFunction = Proto->codegen(ctx);
+
+  if (!TheFunction)
+    return nullptr;
+
+  if (!TheFunction->empty())                                                    // [2]
+    return (llvm::Function *)logErrorV("Function cannot be redefined.");
+
+  // Create a new basic block to start insertion into.
+  llvm::BasicBlock *BB = llvm::BasicBlock::Create(*ctx.theContext, "entry", TheFunction);  // [3]
+  ctx.builder->SetInsertPoint(BB);
+
+  // Record the function arguments in the NamedValues map.
+  ctx.namedValues.clear();                                                      // [4]
+  for (auto &Arg : TheFunction->args())
+    ctx.namedValues[std::string(Arg.getName())] = &Arg;
+
+  if (llvm::Value *RetVal = Body->codegen(ctx)) {                               // [5]
+    // Finish off the function.
+    ctx.builder->CreateRet(RetVal);
+
+    // Validate the generated code, checking for consistency.
+    llvm::verifyFunction(*TheFunction);
+
+    return TheFunction;
+  }
+
+  // Error reading body, remove function.
+  TheFunction->eraseFromParent();                                               // [6]
+  return nullptr;
+}
+```
+
+- **[1] Resolve the `Function`.** The module is searched first, in case this
+  name was already declared by a previous `extern` — then the existing
+  (bodiless) `Function` is reused rather than a new one created. Only when
+  the lookup comes back null does `Proto->codegen(ctx)` create the
+  declaration.
+- **[2] Refuse redefinition.** Either way, the function must still be
+  *empty* — no body yet. A body means this `def` is a redefinition, which is
+  an error in this chapter. (Chapter 4 drops this guard when every function
+  moves into its own module — upstream meant redefinition to become a REPL
+  feature there, but modern ORC rejects duplicate symbols, so it fails at
+  the JIT layer instead; see Chapter4's README.)
+- **[3] Give the builder somewhere to point.** A **basic block** is a
+  straight-line run of instructions: execution enters only at the top and
+  leaves only at the bottom, which is what makes blocks the nodes of the
+  **control-flow graph (CFG)**. `BasicBlock::Create` makes an empty block
+  named `entry` *inside* `TheFunction`, and `SetInsertPoint` aims the
+  builder at its end — this is the "assumes the builder is already set up"
+  promise from the setup section being kept. With no control flow in the
+  language yet, one block per function is the entire CFG; Chapter 5 adds
+  branching, and with it functions of many blocks.
+- **[4] Populate the symbol table.** `namedValues` is cleared (whatever the
+  previous function left there is out of scope) and refilled with this
+  function's arguments, keyed by the names `PrototypeAST::codegen` set — so
+  that when the body's `VariableExprAST::codegen` looks up `x`, it finds the
+  corresponding argument's `Value`.
+- **[5] Emit the body and finish.** `Body->codegen(ctx)` emits the whole
+  expression tree into the entry block and returns the `Value*` holding its
+  result; `CreateRet` makes that the function's return value, completing the
+  function. `verifyFunction` then runs LLVM's consistency checks over the
+  generated code — the tutorial recommends always running it: it is cheap
+  and catches a lot of compiler bugs.
+- **[6] Or clean up.** If the body failed (`nullptr` — say, an unknown
+  variable), the half-built function is deleted with `eraseFromParent`.
+  Leaving it would be worse than it looks: it would sit in the module *with
+  a body*, so the guard at [2] would forever refuse the user's corrected
+  retry. Note the asymmetry this creates: a `def` whose body *failed* may be
+  retried, while a `def` that *succeeded* is permanent.
 
 Two upstream behaviors are kept deliberately:
 
@@ -286,7 +502,9 @@ Two upstream behaviors are kept deliberately:
 
 Each `handle*` now generates and prints; note the top-level case still
 deletes the anonymous function after showing it — it has served its purpose,
-and the next top-level expression will create a fresh `__anon_expr`:
+and the next top-level expression will create a fresh `__anon_expr` (in
+Chapter 4, that anonymous wrapper becomes exactly what the JIT looks up and
+executes):
 
 **`Chapter3/src/parser.cpp`**
 ```cpp
@@ -319,9 +537,8 @@ the same name as in Chapter2 but are NOT all identical. The exact split:
 | `test/filecheck/codegen.k`, `codegen-error.k` | Replace Chapter2's `parse.k`/`parse-error.k` — the driver output to check is now IR, not "Parsed a ..." lines. |
 
 **Same filename, byte-identical** — safe to skip when reading:
-`include/lexer.h`, `src/lexer.cpp`, `src/log.cpp`, `include/log.h` (its
-`logErrorV` was declared ahead of time in Chapter2 and is finally used now),
-`test/lexer_test.cpp`, `test/filecheck/lit.cfg`.
+`include/lexer.h`, `src/lexer.cpp`, `test/lexer_test.cpp`,
+`test/filecheck/lit.cfg`.
 
 **Same filename, modified** — before → after:
 
@@ -335,7 +552,8 @@ toy::Parser parser(lexer);            toy::IRGenContext ctx;            // NEW
 ```
 
 `Chapter3/include/ast.h` — every node grows a `codegen()` declaration (plus
-`#include "ir_gen_ctx.h"`); otherwise the classes are unchanged:
+the LLVM IR headers and `#include "ir_gen_ctx.h"` — Chapter2's copy included
+no LLVM at all); otherwise the classes are unchanged:
 
 ```cpp
 // Chapter2: pure data                        // Chapter3: data + codegen
@@ -349,6 +567,17 @@ public:                                        public:
 
 (`ExprAST` gains the pure-virtual `codegen`; `PrototypeAST`/`FunctionAST`
 gain the `llvm::Function*`-returning variant.)
+
+`Chapter3/include/log.h` + `src/log.cpp` — a third helper for the new failure
+domain: `logErrorV` (upstream's `LogErrorV`) reports and returns a null
+`llvm::Value*` the way `logError` returns a null AST node:
+
+```cpp
+// Chapter2                                      // Chapter3
+std::unique_ptr<ExprAST> logError(...);           std::unique_ptr<ExprAST> logError(...);
+std::unique_ptr<PrototypeAST> logErrorP(...);     std::unique_ptr<PrototypeAST> logErrorP(...);
+                                                  llvm::Value *logErrorV(const char *str);  // NEW
+```
 
 `Chapter3/include/parser.h` — the constructor takes and stores the context; every
 `parse*` method is untouched:
@@ -389,8 +618,11 @@ unreachable end-of-loop module dump was removed.
 builds an `IRGenContext ctx;` and calls `Parser parser(lexer, ctx);`); the
 test cases themselves are identical.
 
-`Chapter3/CMakeLists.txt` — adds `src/codegen.cpp` to `toy_core` and registers the
-`codegen_test` executable.
+`Chapter3/CMakeLists.txt` — adds `src/codegen.cpp` to `toy_core`, registers the
+`codegen_test` executable, and — new this chapter — finds LLVM, links the
+`core` component, and pins the macOS deployment target to match the Homebrew
+LLVM libraries (Chapter2, like upstream's Chapter 2, has no LLVM build
+dependency at all).
 
 `Chapter3/cmd.txt` — new demo input matching the chapter (functions worth looking at
 as IR).
@@ -435,7 +667,9 @@ entry:
 Note `bar` calls *itself*: by the time the body is codegen'd, `bar`'s own
 declaration is already in the module (created a few lines earlier in
 `FunctionAST::codegen`), so the recursive `getFunction("bar")` lookup
-succeeds — forward-progress for free.
+succeeds — forward-progress for free. (Don't actually *call* `bar`, though:
+with no conditionals until Chapter 5 the recursion has no base case, so it
+would run forever — upstream makes the same joke.)
 
 ```
 ready> extern cos(x);
@@ -475,9 +709,9 @@ adds:
   `CHECK-NEXT`/`CHECK-COUNT-2` pin ordering and counts. Chapter 3 emits raw,
   unoptimized IR, so the expected instruction structure is stable.
 - **`test/filecheck/codegen-error.k`**: codegen-stage errors (unknown
-  variable, unknown function) must be reported *and* the driver must keep
-  accepting input — same error-recovery contract the parser had, one stage
-  later.
+  variable, unknown function, function redefinition) must be reported *and*
+  the driver must keep accepting input — same error-recovery contract the
+  parser had, one stage later.
 
 ```sh
 ctest --test-dir build                 # everything

@@ -4,7 +4,11 @@ Kaleidoscope gets real **mutable variables**: an assignment operator
 (`x = x + 1`), `var/in` declarations, and mutability for loop variables and
 function parameters. The chapter is really about one big compiler idea:
 
-**The SSA construction problem.** LLVM IR requires SSA form — but programs
+**The SSA construction problem.** Chapters 1–6 built what is, so far, a
+*functional* language — every value is defined exactly once, which makes
+emitting SSA-form IR almost accidental (upstream: functional languages are
+"too easy" to generate LLVM IR for). LLVM IR requires SSA form — there is no
+"non-SSA mode" to postpone it — but *imperative* programs
 mutate variables. In [Chapter5](../Chapter5/README.md) we could emit phi
 nodes by hand only because the *only* merge points were the two structured
 constructs (`if`, `for`), each with a known shape. Once the user can write
@@ -65,6 +69,102 @@ including a rewritten for-loop and function-argument handling:
 (A precise file-by-file diff against Chapter6 is in
 [File-by-file](#file-by-file-what-changed-from-chapter6) near the end.)
 
+## The problem in C, and the memory loophole
+
+Upstream grounds the problem in five lines of C:
+
+```c
+// upstream (LangImpl07)
+int G, H;
+int test(_Bool Condition) {
+  int X;
+  if (Condition)
+    X = G;
+  else
+    X = H;
+  return X;
+}
+```
+
+`X` holds a different value depending on the path taken, so the SSA form of
+`test` needs a phi node at the merge point to reconcile the two versions:
+
+```
+; upstream (LangImpl07) — the IR we want
+define i32 @test(i1 %Condition) {
+entry:
+  br i1 %Condition, label %cond_true, label %cond_false
+
+cond_true:
+  %X.0 = load i32, i32* @G
+  br label %cond_next
+
+cond_false:
+  %X.1 = load i32, i32* @H
+  br label %cond_next
+
+cond_next:
+  %X.2 = phi i32 [ %X.1, %cond_false ], [ %X.0, %cond_true ]
+  ret i32 %X.2
+}
+```
+
+The chapter's question is: *who places that phi?* Three facts about how
+LLVM treats **memory** open the loophole the frontend uses instead of
+answering it:
+
+- **A variable's name is its address.** Look at the globals above: `@G` is
+  *defined* as an `i32`, but the type of `@G` itself is `i32*` — the name
+  refers to the address of the storage. LLVM deliberately has no
+  "address-of" operator because it never needs one; every memory access is
+  an explicit `load` or `store` through such an address. Stack variables
+  work exactly the same way, just declared with the `alloca` instruction
+  instead of a global definition.
+- **Memory is exempt from SSA.** Single assignment is required of register
+  values and *not required (or even permitted)* of memory objects — the
+  loads from `@G`/`@H` above access them directly, unrenamed and
+  unversioned. (Some compiler systems version memory objects in their IR;
+  LLVM instead keeps memory dataflow out of the IR and computes it on
+  demand with analysis passes.)
+- **`alloca` is fully general.** The address it returns is a first-class
+  pointer: it can be stored elsewhere, passed to functions, offset with
+  pointer arithmetic. That generality is also exactly what mem2reg must
+  prove *wasn't* exploited before it may promote (below).
+
+Rewriting `test` with an alloca eliminates every phi — store to `%X` in
+both branches, a single load at the merge — and that rewritten function is
+verbatim this repo's `mem2reg_ex/example.ll`: run `mem2reg_ex/run.sh` and
+mem2reg hands back the phi version above. Hence the full recipe from the
+intro — a stack slot per mutable variable, a load per read, a store per
+write — plus its fourth, degenerate rule: *taking a variable's address*
+just uses the stack address directly.
+
+mem2reg promotes an alloca only under specific conditions — all easy for an
+imperative language to satisfy, and each one visible in this chapter's code:
+
+- It is **alloca-driven**: it promotes allocas it can prove safe and never
+  touches global variables or heap allocations.
+- The alloca must sit in the **entry block**, which guarantees it executes
+  exactly once and keeps the analysis simple — providing that is
+  `CreateEntryBlockAlloca`'s whole job (next section).
+- Every use must be a **direct load or store**. An alloca whose address
+  escapes — passed to a function, stored, or fed to "funny pointer
+  arithmetic" — is not promoted.
+- It must hold a **first-class value** (scalar, pointer, vector) with array
+  size 1. Structs and arrays are out of scope — the more powerful `sroa`
+  pass promotes many of those.
+
+Should a frontend bother with this instead of building SSA itself?
+Upstream's answer is an emphatic yes, three times over: the technique is
+**proven and well-tested** (clang lowers every local C/C++ variable this
+way, so LLVM's most common client shakes bugs out fast), **extremely fast**
+(mem2reg fast-paths the common degenerate cases — variables used in a
+single block, variables with one assignment point, heuristics that avoid
+inserting unneeded phis), and **needed for debug info anyway** (debug
+information attaches to a variable's exposed address, which this style
+provides for free). If nothing else, it is the quickest way to get a
+frontend up and running.
+
 ## The alloca infrastructure
 
 Everything funnels through one helper. mem2reg only promotes allocas in the
@@ -82,7 +182,10 @@ static llvm::AllocaInst *CreateEntryBlockAlloca(llvm::Function *TheFunction,
 }
 ```
 
-With `namedValues` now holding `AllocaInst*` (addresses, not values), a
+Changing `namedValues` to hold `AllocaInst*` (addresses, not values) is, by
+itself, a pure refactoring — it restructures the codegen without changing
+any observable behavior; nothing can *see* the mutability until `=` arrives
+in the next section. With the map holding addresses, a
 variable *reference* must explicitly load:
 
 **`Chapter7/src/codegen.cpp`**
@@ -120,11 +223,83 @@ The pipeline addition that makes all this free:
         theFPM->addPass(llvm::PromotePass());   // mem2reg, first in the pipeline
 ```
 
+### Before and after: mem2reg on `fib`
+
+Upstream pauses to show the cost and the cure on plain recursive `fib` —
+one variable, the parameter `x`. What the frontend now emits, before any
+pass runs, is deliberately dumb:
+
+```
+; upstream (LangImpl07) — fib as emitted, before mem2reg (abridged)
+define double @fib(double %x) {
+entry:
+  %x1 = alloca double
+  store double %x, double* %x1
+  %x2 = load double, double* %x1
+  %cmptmp = fcmp ult double %x2, 3.000000e+00
+  ...
+else:
+  %x3 = load double, double* %x1
+  %subtmp = fsub double %x3, 1.000000e+00
+  %calltmp = call double @fib(double %subtmp)
+  %x4 = load double, double* %x1
+  ...
+ifcont:
+  %iftmp = phi double [ 1.000000e+00, %then ], [ %addtmp, %else ]
+  ret double %iftmp
+```
+
+One alloca in the entry block, the incoming argument stored once, and a
+fresh reload at *every* reference. Two things to notice. First, the
+if/then/else still produces its `iftmp` phi directly — that merge has a
+known, structured shape, so `IfExprAST::codegen` was left alone: making a
+phi there is easier than making an alloca. Second, this IR is never visible
+in the REPL, because the driver prints post-FPM IR only.
+
+After mem2reg alone, the alloca, the store, and all the reloads collapse
+into direct uses of `%x`. This `fib` is a *trivial* promotion — the
+variable is never reassigned, so not even a phi is needed — and upstream
+shows it precisely "to calm your tension" about the blatant stack traffic
+the frontend now emits. After the *rest* of the pipeline, this chapter's
+binary prints:
+
+```
+ready> def fib(x) if (x < 3) then 1 else fib(x-1)+fib(x-2);
+Read function definition:
+define double @fib(double %x) {
+entry:
+  %cmptmp = fcmp ult double %x, 3.000000e+00
+  br i1 %cmptmp, label %ifcont, label %else
+
+else:                                             ; preds = %entry
+  %subtmp = fadd double %x, -1.000000e+00
+  %calltmp = call double @fib(double %subtmp)
+  %subtmp5 = fadd double %x, -2.000000e+00
+  %calltmp6 = call double @fib(double %subtmp5)
+  %addtmp = fadd double %calltmp, %calltmp6
+  br label %ifcont
+
+ifcont:                                           ; preds = %entry, %else
+  %iftmp = phi double [ %addtmp, %else ], [ 1.000000e+00, %entry ]
+  ret double %iftmp
+}
+```
+
+— zero memory traffic, and the cleanup passes kept simplifying:
+instcombine rewrote `x - 1` as `x + -1.0` and folded Chapter 5's
+`<`-comparison boolean dance (`uitofp` + compare-against-zero) straight
+into the branch. (Upstream's older output shows a different final shape —
+simplifycfg cloning the `ret` into the `else` block to delete the phi; the
+exact shape shifts with the LLVM version, the promise doesn't.)
+
 ## Assignment: `=` as a binary operator
 
 `'='` enters the precedence table at 2 — lower than everything, so
 `x = y + 1` parses as `x = (y + 1)` — installed alongside the built-ins in
-the `IRGenContext` constructor. Codegen special-cases it **before** the
+the `IRGenContext` constructor. That one line is the entire parser change:
+to the parser, `=` is just another binary operator. The difference is in
+codegen — unlike Chapter 6's user-defined operators it is handled
+*internally*, never dispatched to a user function. Codegen special-cases it **before** the
 normal children-first recursion, because the LHS of an assignment must not
 be evaluated (it's a *location*, not a value — what C calls an lvalue):
 
@@ -156,10 +331,16 @@ undefined behavior and the `if (!LHSE)` guard never actually fires. Upstream
 ships exactly this code with the same comment; a real frontend would add a
 "kind" field to the AST (the planned v2 does).
 
-Returning `Val` makes assignment an expression, so it chains and composes
+Returning `Val` makes assignment an expression, so it supports chained
+assignments (`X = (Y = Z)`) and composes
 with the sequencing operator: `printd(x) : x = 4 : printd(x)`.
 
 ## `var/in`: Declarations with scope
+
+With `=` alone, the only mutable things are function parameters and loop
+induction variables — upstream: "redefining those only goes so far :)". And
+declaring new variables is useful regardless of whether you mutate them.
+Hence `var/in`:
 
 ```
 varexpr ::= 'var' identifier ('=' expression)?

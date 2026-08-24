@@ -17,7 +17,6 @@
 //===----------------------------------------------------------------------===//
 int compile_obj(toy::IRGenContext& ctx) {
   auto TargetTriple = llvm::sys::getDefaultTargetTriple();
-  //ctx.theModule->setTargetTriple(llvm::Triple(TargetTriple));
   ctx.theModule->setTargetTriple(TargetTriple);
 
   std::string Error;

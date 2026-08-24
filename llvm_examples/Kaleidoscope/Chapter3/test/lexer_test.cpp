@@ -68,6 +68,7 @@ INSTANTIATE_TEST_SUITE_P(
         // Identifiers
         LexerTestCase{"myVar", tok_identifier, "myVar"},
         LexerTestCase{"x123", tok_identifier, "x123"},
+        LexerTestCase{"my_var", tok_identifier, "my"},  // '_' is not isalnum, so it ends the identifier: "my_var" lexes as my, '_', var
 
         // Numbers
         LexerTestCase{"42", tok_number, "", 42.0},
@@ -78,8 +79,8 @@ INSTANTIATE_TEST_SUITE_P(
         // Edge cases for numbers
         LexerTestCase{".5", tok_number, "", 0.5},
         LexerTestCase{"5.", tok_number, "", 5.0},
-        LexerTestCase{".", tok_identifier, "."},  // a single dot is not a valid number, so it should be treated as an identifier
-        LexerTestCase{".x", tok_identifier, ".x"},  // a dot followed by a letter is not a valid number, so it should be treated as an identifier
+        LexerTestCase{".", '.'},   // lone dot is NOT a number (deviation from upstream, which lexes it as 0.0)
+        LexerTestCase{".x", '.'},  // dot not followed by a digit: returned as ASCII '.', 'x' is left for the next call
         LexerTestCase{".0123", tok_number, "", 0.0123},
         LexerTestCase{"3.14.15", tok_number, "", 3.14}, // the lexer consumes all of "3.14.15"; strtod stops at the second dot
 

@@ -1,13 +1,27 @@
 # Chapter 6 — User-defined Operators
 
 This chapter lets Kaleidoscope programs define **their own operators** —
-new binary operators with a chosen precedence, and unary operators:
+new binary operators with a chosen precedence, and unary operators. The
+motivation: the language so far is functional but operator-poor — no
+division, no logical negation, no comparison besides `<`. Rather than
+hard-coding each missing operator, this chapter (a "wild digression",
+upstream admits — your language, your call on what's good or bad) lets the
+*user* round out the set:
 
 ```
 def unary!(v)           if v then 0 else 1;    # logical not
 def binary| 5 (LHS RHS) if LHS then 1 else     # logical or, precedence 5
                           (if RHS then 1 else 0);
 ```
+
+This is more general than C++-style operator overloading: C++ only lets you
+redefine *existing* operators — you cannot introduce new ones, choose their
+precedence, or otherwise change the grammar. Kaleidoscope after this chapter
+can do all three, the grammar extending itself dynamically while the JIT
+runs. The payoff of that generality is the aspiration many languages have
+for their standard runtimes — implementing the language *in its own
+library*: `mandel.txt` defines `!`, unary `-`, `>`, `|`, `&`, `=`, and `:`
+entirely in Kaleidoscope source.
 
 Two general ideas make this nearly free to implement:
 
@@ -117,6 +131,9 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 ```
 
 Anything ASCII that isn't `(` or `,` is *presumed* to be a unary operator.
+Note what is *absent* here: precedence. Unary operators cannot parse
+ambiguously the way binary ones can — a prefix chain like `!!x` has exactly
+one reading — so there is no table and no climbing, just recursion.
 A behavioral consequence worth knowing: inputs like `+10` or `10 ++ 5` used
 to be parse errors and now **parse fine** (as applications of a unary `+`) —
 they only fail later, at codegen, if no `unary+` was defined. Two parser
@@ -140,6 +157,12 @@ llvm::Value *UnaryExprAST::codegen(IRGenContext &ctx) {
   return ctx.builder->CreateCall(F, OperandV, "unop");
 }
 ```
+
+It is simpler than the binary version for one reason: there are no
+*built-in* unary operators to special-case, so the call is the whole story.
+(Note it also fails softly with `logErrorV` — an undefined unary operator
+is reachable from ordinary input, since `parseUnary` presumes any operator
+character is unary.)
 
 `BinaryExprAST::codegen()` keeps the four built-ins inline and adds a
 fallthrough — the `default:` that used to be an error now `break`s into:
@@ -189,7 +212,81 @@ itself* (see `mandel.txt` — e.g. the sequencing operator
 `def binary: 1 (x y) y;` whose whole point is precedence 1, executing both
 sides for effect), plus
 `putchard`/`printd` from Chapter5, the language is expressive enough for the
-tutorial's showcase — an ASCII Mandelbrot renderer. `./run.sh` ends with:
+tutorial's showcase — an ASCII Mandelbrot renderer. `mandel.txt` builds it
+in three steps.
+
+**A pixel.** `printdensity` maps a value to a character whose visual
+"density" reflects it — the lower the value, the denser the glyph:
+
+**`Chapter6/mandel.txt`**
+```
+def printdensity(d)
+  if d > 8 then
+    putchard(32) # ' '
+  else if d > 4 then
+    putchard(46) # '.'
+  else if d > 2 then
+    putchard(43) # '+'
+  else
+    putchard(42); # '*'
+```
+
+so `printdensity(1): printdensity(2): printdensity(3): printdensity(4):
+printdensity(5): printdensity(9): putchard(10);` prints `**++.` followed by
+a space and a newline — a one-liner built entirely from this chapter's
+user-defined `>` and `:`.
+
+**The math.** A point *c* of the complex plane belongs to the Mandelbrot
+set if iterating *z = z² + c* from *z = 0* never diverges.
+`mandelconverger` counts how many iterations it takes to escape
+(|z|² > 4), saturating at 255; complex arithmetic is spelled out in doubles
+(`real·real − imag·imag` and `2·real·imag`), the escape test is this
+chapter's `|` and `>`, and recursion is the loop:
+
+**`Chapter6/mandel.txt`**
+```
+# Determine whether the specific location diverges.
+# Solve for z = z^2 + c in the complex plane.
+def mandelconverger(real imag iters creal cimag)
+  if iters > 255 | (real*real + imag*imag > 4) then
+    iters
+  else
+    mandelconverger(real*real - imag*imag + creal,
+                    2*real*imag + cimag,
+                    iters+1, creal, cimag);
+
+# Return the number of iterations required for the iteration to escape
+def mandelconverge(real imag)
+  mandelconverger(real, imag, 0, real, imag);
+```
+
+Plotting that iteration count over a 2-D window *is* the Mandelbrot set.
+
+**The plot.** Two nested Chapter5 `for` loops sweep the window,
+`printdensity(mandelconverge(x,y))` draws each cell, the sequencing `:`
+tacks a newline onto each row, and `mandel` converts "start +
+magnification" into ranges sized for a terminal (78 columns × 40 rows):
+
+**`Chapter6/mandel.txt`**
+```
+def mandelhelp(xmin xmax xstep ymin ymax ystep)
+  for y = ymin, y < ymax, ystep in (
+    (for x = xmin, x < xmax, xstep in
+       printdensity(mandelconverge(x,y)))
+    : putchard(10)
+  )
+
+# mandel - This is a convenient helper function for plotting the mandelbrot set
+# from the specified position with the specified Magnification.
+def mandel(realstart imagstart realmag imagmag)
+  mandelhelp(realstart, realstart+realmag*78, realmag,
+  	     imagstart, imagstart+imagmag*40, imagmag);
+```
+
+`mandel.txt` ends by rendering three windows —
+`mandel(-2.3, -1.3, 0.05, 0.07)` (the whole set),
+`mandel(-2, -1, 0.02, 0.04)`, and `mandel(-0.9, -1.4, 0.02, 0.03)` (two
+closer views). `./run.sh` renders all of them; a slice of the first:
 
 ```
 **+++++++++++++++++++++++++....                ...++++++++++++++++*************
@@ -202,6 +299,13 @@ tutorial's showcase — an ASCII Mandelbrot renderer. `./run.sh` ends with:
 ++++++++++.....                                       ........  ...+++++*******
 ++++++++......                                                   ..++++++******
 ```
+
+(Upstream's closing joke: Kaleidoscope may not be self-similar, but it can
+plot things that are.) One capability is still conspicuously missing — a
+Kaleidoscope program can call side-effecting functions but cannot *define
+or mutate a variable* of its own. That is the next chapter's subject:
+[Chapter7](../Chapter7/README.md) adds mutation *without* bolting an "SSA
+construction" phase onto the frontend.
 
 ## File-by-file: What changed from Chapter5
 
@@ -320,8 +424,9 @@ entry:
 Evaluated to 0.000000
 ```
 
-Note the quoted symbol `@"binary:"` — LLVM allows any characters in a name
-as long as it's quoted.
+Note the quoted symbol `@"binary:"` — LLVM symbol names may contain any
+character (upstream notes even embedded NULs are legal); the printed form
+just needs quoting.
 
 ## Tests
 

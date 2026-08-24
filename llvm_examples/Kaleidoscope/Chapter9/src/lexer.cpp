@@ -7,7 +7,7 @@
 
 using namespace toy;
 
-SourceLocation CurLoc;  // Temp Global variable
+namespace toy { SourceLocation CurLoc; }  // Temp Global variable (declared in debug.h)
 
 /// gettok - Return the next token from standard input.
 int Lexer::gettok() {
