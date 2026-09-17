@@ -56,6 +56,7 @@ README](Chapter3/README.md) expands on this where the IR first appears).
 | `Chapter8` | Chapter 8: object files via `TargetMachine`; deliberately **no JIT**. |
 | `Chapter9` | Chapter 9: DWARF debug info; batch compiler dumping one module at exit. |
 | `ChapterA` | The redesigned counterpart: one binary (`toyc -emit=ast\|ir\|obj\|jit`), MLIR-Toy-style frontend design. Its own conventions — see [its README](ChapterA/README.md). |
+| `ChapterB` | A second design iteration on ChapterA: DiagnosticEngine, parser error recovery, and a name-resolving Sema pass whose bindings make IR emission infallible — see [its README](ChapterB/README.md). |
 | `BuildingAJIT` | Upstream reference code for the ["Building a JIT"](https://llvm.org/docs/tutorial/BuildingAJIT1.html) tutorial series (ORC, one chapter per layer) — kept as-is, not refactored. |
 | `include/KaleidoscopeJIT.h` | The tutorial's ORC JIT wrapper, shared by Chapter4+ and ChapterA. |
 

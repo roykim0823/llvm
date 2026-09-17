@@ -748,3 +748,7 @@ echo '1 = 2;' | ./build/toyc -emit=ir; echo "exit=$?"       # located error, non
   kept for language fidelity; the lexer test documents it.
 - v2 requires `def`-before-use across records for *calls at JIT time*
   (records are processed in source order), same as the upstream REPL.
+
+The diagnostic-engine and error-recovery items (and §5's oversized codegen
+`Impl`) are addressed in [ChapterB](../ChapterB/README.md), a further
+design iteration on this codebase.
