@@ -1,8 +1,7 @@
 # Chapter 1 & 2 — Lexer, Parser, and AST
 
 A compiler **frontend** turns flat source text into a structured form the
-rest of the compiler can work with. 
-Three concepts do the frontend's job:
+rest of the compiler can work with. Three concepts do the frontend's job:
 
 - **Lexer** (also *scanner* or *tokenizer*) — groups the raw character stream
   into **tokens**, the "words" of the language: keywords (`def`), identifiers
@@ -28,8 +27,35 @@ Three concepts do the frontend's job:
                                                             y      2
 ```
 
-Kaleidoscope itself is a tiny procedural language with exactly one type —
-every value is a 64-bit double, so there are no type declarations anywhere.
+Kaleidoscope is the tutorial's language: a tiny procedural language with
+exactly one type — every value is a 64-bit double, so there are no type
+declarations anywhere. Over the course of the tutorial it grows
+`if/then/else`, a `for` loop, user-defined operators, JIT compilation behind
+a simple command line, and debug info. A complete program, computing
+Fibonacci numbers:
+
+```C
+# Compute the x'th fibonacci number.
+def fib(x)
+  if x < 3 then
+    1
+  else
+    fib(x-1)+fib(x-2)
+
+# This expression will compute the 40th number.
+fib(40)
+```
+Kaleidoscope can also call into the C standard library — the LLVM JIT
+(Chapter 4) resolves the names for free. The `extern` keyword declares a
+function before it is used, which also covers mutually recursive functions:
+
+```C
+extern sin(arg);
+extern cos(arg);
+extern atan2(arg1 arg2);
+atan2(sin(.4), cos(42))
+```
+
 Everything the language consists of at this stage:
 
 - **Function definitions**: `def` + a prototype + a body that is a *single
@@ -55,38 +81,50 @@ One syntax gotcha worth knowing up front, visible in the snippets above:
 prototype parameters are space-separated (`def foo(x y)`), while call
 arguments use commas (`foo(a, b)`).
 
-The code realizes the pipeline above as two classes. `main.cpp` constructs
-one `Lexer` and one `Parser` (which holds a `Lexer&`), then hands control to
-`parser.mainLoop()`:
+The code realizes the pipeline above as three classes. `main.cpp` constructs
+one `Driver`; the driver owns one `Lexer` and one `Parser` (which holds a
+`Lexer&`) and runs the read-eval-print loop that feeds one to the other:
 
 ```
                 source text (stdin)
                       │  getchar(), one character at a time
                       ▼
-        ┌─────────────────────────────┐
-        │ toy::Lexer                  │  state: lastChar (1-char lookahead),
-        │   int gettok()              │         identifierStr, numVal
-        └─────────────────────────────┘
-                      │  token stream: tok_def, tok_identifier, '(', '+', ...
-                      │  side data pulled via getIdentifierStr() / getNumVal()
-                      ▼
-        ┌─────────────────────────────┐
-        │ toy::Parser                 │  state: curTok (1-token lookahead),
-        │   mainLoop()                │         binopPrecedence map
-        │   parse*() methods          │
-        └─────────────────────────────┘
-             │                    │
-     success │                    │ failure
-             ▼                    ▼
-   AST nodes (ast.h)      logError / logErrorP (log.h/.cpp)
-   NumberExprAST, ...     print "Error: ..." to stderr and return
-                          nullptr, which propagates up the parse calls
+  ┌─ toy::Driver (driver.h/.cpp) — owns both stages, runs mainLoop() ──────────┐
+  │                                                                            │
+  │     ┌─────────────────────────────┐                                        │
+  │     │ toy::Lexer                  │  state: lastChar (1-char lookahead),   │
+  │     │   int gettok()              │         identifierStr, numVal          │
+  │     └─────────────────────────────┘                                        │
+  │                   │  token stream: tok_def, tok_identifier, '(', '+', ...  │
+  │                   │  side data pulled via getIdentifierStr() / getNumVal() │
+  │                   ▼                                                        │
+  │     ┌─────────────────────────────┐                                        │
+  │     │ toy::Parser                 │  state: curTok (1-token lookahead),    │
+  │     │   parse*() methods          │         binopPrecedence map            │
+  │     └─────────────────────────────┘                                        │
+  │          │                    │                                            │
+  │  success │                    │ failure                                    │
+  │          ▼                    ▼                                            │
+  │   AST nodes (ast.h)      logError / logErrorP (log.h/.cpp)                 │
+  │   NumberExprAST, ...     print "Error: ..." to stderr and return           │
+  │          │               nullptr, which propagates up the parse calls      │
+  │          ▼                                                                 │
+  │   handle*(): report "Parsed a ..."   (Chapter 3: hand the AST to codegen)  │
+  └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Note the symmetry: the lexer keeps a **one-character** lookahead (`lastChar`)
-over the character stream, and the parser keeps a **one-token** lookahead
-(`curTok`) over the token stream. Each stage peeks at exactly one unit of its
-input before deciding what to do.
+The parser knows nothing about the loop or about what happens to the trees
+it returns; it only turns tokens into AST. The driver is the **composition
+root** — the one object that owns an instance of every stage and therefore
+the only place that knows the pipeline's order. That split is cheap here
+(the "next stage" is a `fprintf`), and it is what lets Chapter 3 add code
+generation by giving the driver one more member rather than by teaching the
+parser about LLVM.
+
+The two stages mirror each other: the lexer keeps a **one-character**
+lookahead (`lastChar`) over the character stream, and the parser keeps a
+**one-token** lookahead (`curTok`) over the token stream. Each stage peeks at
+exactly one unit of its input before deciding what to do.
 
 The code is organized into three directories — `src/`, `include/`, and
 `test/` — as tabulated below. Note this directory covers only the frontend
@@ -95,10 +133,11 @@ stage: no code generation yet; the driver just reports what it parsed.
 | File | Contents — and its tutorial counterpart |
 | --- | --- |
 | `include/lexer.h`, `src/lexer.cpp` | The `Token` enum and the `Lexer` class: `gettok()` plus the token's side data. Upstream's globals `IdentifierStr`/`NumVal` became the members `identifierStr`/`numVal`, and `gettok()`'s `static int LastChar` local became the member `lastChar`. |
-| `include/ast.h` | The AST: `ExprAST` base class with `NumberExprAST`, `VariableExprAST`, `BinaryExprAST`, `CallExprAST`, plus `PrototypeAST` and `FunctionAST` — upstream's classes unchanged, moved from an anonymous namespace into `namespace toy`. Header-only — the nodes are pure data at this stage. |
-| `include/parser.h`, `src/parser.cpp` | The `Parser` class: upstream's free `Parse*`/`Handle*` functions and `MainLoop()` became the `parse*`/`handle*` methods and `mainLoop()`; the globals `CurTok` and `BinopPrecedence` became the members `curTok` and `binopPrecedence` (the table now filled in the constructor rather than in `main()`). |
+| `include/ast.h` | The AST: `ExprAST` base class with `NumberExprAST`, `VariableExprAST`, `BinaryExprAST`, `CallExprAST`, plus `PrototypeAST` and `FunctionAST` — upstream's classes moved from an anonymous namespace into `namespace toy`, each given a **kind tag** (`getKind()`/`classof()`) and getters so that consumers can walk the tree. Header-only; the nodes are pure data. |
+| `include/parser.h`, `src/parser.cpp` | The `Parser` class: upstream's free `Parse*` functions became the `parse*` methods; the globals `CurTok` and `BinopPrecedence` became the members `curTok` and `binopPrecedence` (the table now filled in the constructor rather than in `main()`). The parser only produces AST — it has no loop and no printing. |
+| `include/driver.h`, `src/driver.cpp` | The `Driver` class: upstream's `Handle*` functions and `MainLoop()` became the `handle*` methods and `mainLoop()`. It owns the `Lexer` and the `Parser` and is the only code that calls both — the composition root that later chapters plug new stages into. |
 | `include/log.h`, `src/log.cpp` | Error helpers `logError`/`logErrorP` — upstream's `LogError`/`LogErrorP` free functions. They print to stderr and return `nullptr`, so a failed parse propagates up as a null pointer. |
-| `src/main.cpp` | `main()`: constructs a `Lexer` and a `Parser`, then runs `parser.mainLoop()` — upstream's `main()` minus the precedence-table setup and the token priming, both of which moved into the `Parser` (see the deviation subsections). |
+| `src/main.cpp` | `main()`: constructs a `Driver` and runs `mainLoop()` — upstream's `main()` minus the precedence-table setup (now in the `Parser` constructor) and the token priming (now the first line of `Driver::mainLoop()`; see [Deviations from upstream](#deviations-from-upstream)). |
 
 ## Chapter 1: The Lexer
 
@@ -169,8 +208,8 @@ int Lexer::gettok() {
     }
 
     if (isdigit(lastChar) || lastChar == '.') {  // [3] number: [0-9.]+
-        ...                                      //     (full branch in the
-    }                                            //      deviation section below)
+        ...                                      //     (full branch just below)
+    }
 
     if (lastChar == '#') {                       // [4] comment until end of line
         do lastChar = getchar();
@@ -196,11 +235,11 @@ int Lexer::gettok() {
   fills the `identifierStr` metadata as it goes.
 - **[3] Numbers** follow the same accumulate-then-convert shape: collect
   `[0-9.]+` into a string, let C's `strtod` turn it into the `double`
-  stored in `numVal`, return `tok_number`. This is the one place the
-  *lexer* deliberately deviates from upstream (validating a leading `.`),
-  so the branch is shown in full in its own subsection below — including
-  upstream's acknowledged non-check that makes `1.23.45.67` silently lex
-  as `1.23`.
+  stored in `numVal`, return `tok_number`. The branch is shown in full just
+  below; it is the one place the lexer deliberately differs from the
+  tutorial. One upstream quirk it keeps: nothing checks for a second dot,
+  so `1.23.45.67` silently lexes as `1.23` (`strtod` stops at the second
+  dot).
 - **[4] Comments** run to end of line; `gettok()` then *recurses* to return
   whatever token follows the comment, so the parser never sees one.
 - **[5] End of input** maps to `tok_eof` — and EOF is deliberately *not*
@@ -210,31 +249,9 @@ int Lexer::gettok() {
   value (the negative-enum trick from above), with `lastChar` advanced
   past it.
 
-### Deviation from upstream: leading-dot handling in the number path
-
-The one deliberate change to `gettok()` is in the number-lexing branch. The
-tutorial's version is the naive loop:
-
-```cpp
-// upstream (LangImpl01)
-if (isdigit(LastChar) || LastChar == '.') { // Number: [0-9.]+
-  std::string NumStr;
-  do {
-    NumStr += LastChar;
-    LastChar = getchar();
-  } while (isdigit(LastChar) || LastChar == '.');
-  NumVal = strtod(NumStr.c_str(), nullptr);
-  return tok_number;
-}
-```
-
-This has a real bug the tutorial itself points out: *anything* starting with
-`.` becomes a number. A lone `.` produces `NumStr = "."`, and `strtod(".")`
-silently yields `0.0` — so typing `.` gives you the number zero instead of an
-error.
-
-The refactored version validates the leading dot before committing to the
-number path (`src/lexer.cpp:25`):
+The number branch elided at [3], in full. It validates a leading `.` before
+committing to the number path (the tutorial's version does not; the
+comparison is in [Deviations from upstream](#deviations-from-upstream)):
 
 **`Chapter2/src/lexer.cpp`**
 ```cpp
@@ -262,64 +279,20 @@ if (isdigit(lastChar) || lastChar == '.') {  // Number: [0-9.]+
 }
 ```
 
-As a flow chart:
-
-```
- lastChar ∈ [0-9] or '.'
-        │
-        ├── lastChar == '.' ─── peek: nextChar = getchar()
-        │        │
-        │        ├── nextChar is NOT a digit ──▶ lastChar = nextChar
-        │        │        (".", ".x", "..")      return '.'  (plain ASCII token)
-        │        │
-        │        └── nextChar IS a digit ─────▶ numStr = "0."
-        │                 (".5")                 lastChar = nextChar, fall through
-        ▼
- do { numStr += lastChar; lastChar = getchar(); }
- while (isdigit(lastChar) || lastChar == '.')
-        │
-        ▼
- numVal = strtod(numStr);  return tok_number
-```
-
-Step by step, the change does three things:
-
-1. **Peek one character past the dot.** Since the dot alone is ambiguous
-   (start of `.5`? stray punctuation?), the lexer reads one more character to
-   decide. If it is not a digit, the dot was not a number after all: `gettok`
-   returns `'.'` as an ordinary ASCII token, exactly like any other unknown
-   character.
-2. **Preserve the lookahead invariant.** The peeked character has already
-   been consumed from stdin, so it must be stored back into `lastChar` before
-   returning — otherwise the next `gettok()` call would skip it. This is the
-   same "read but not yet processed" bookkeeping `lastChar` does everywhere
-   else in the lexer.
-3. **Normalize `.5` to `"0.5"` for `strtod`.** When a digit does follow,
-   `numStr += "0."` seeds the buffer with an explicit leading zero, and
-   `lastChar` is set to the digit so the ordinary do-while loop below takes
-   over unchanged. The dot itself is never appended twice — it only enters
-   `numStr` via the `"0."` prefix.
-
-Behavior comparison:
-
-| input     | upstream                              | refactored                            |
-| --------- | ------------------------------------- | ------------------------------------- |
-| `.5`      | `tok_number` 0.5 (`strtod(".5")`)     | `tok_number` 0.5 (`strtod("0.5")`)    |
-| `.`       | `tok_number` **0.0** (silent)         | `'.'` ASCII token                     |
-| `.x`      | `tok_number` 0.0, then `x`            | `'.'` token, then identifier `x`      |
-| `3.14.15` | `tok_number` 3.14 (strtod stops at 2nd dot) | same — quirk deliberately kept  |
-
-The multi-dot quirk (`3.14.15` consumed as one token, `strtod` stopping at the
-second dot) is upstream behavior and is intentionally preserved, per the
-Chapter2–9 policy of staying faithful to the tutorial except where noted.
+The shape is accumulate-then-convert, as for identifiers: collect the
+characters of the literal into `numStr`, hand the string to `strtod`. The
+`if (lastChar == '.')` block is the addition — it peeks one character past a
+leading dot and only enters the number path if a digit follows. `lastChar`
+keeps its "read but not yet processed" meaning throughout: whichever
+character the peek consumed is stored back into it before the function
+returns or continues.
 
 Other lexer facts worth knowing: identifiers do **not** allow `_` (the
 identifier loop accepts `isalnum` characters only, so `my_var` lexes as
 `my`, `'_'`, `var`), and scientific notation is not supported — `1.234567e+10`
 lexes as the number `1.234567` followed by separate `e`, `+`, `10` tokens.
 Both are covered by cases in `test/lexer_test.cpp`, alongside the
-leading-dot behaviors from the deviation section above (`.` and `.x`
-returning the ASCII `'.'` token).
+leading-dot behaviors (`.` and `.x` returning the ASCII `'.'` token).
 
 ## Chapter 2: The Parser and AST
 
@@ -357,16 +330,38 @@ prototypes and functions are separate roots because they are not expressions:
        └──────owns──▶ ExprAST          (the body expression tree)
 ```
 
-The base class is nothing but a virtual destructor — needed so a tree held
-through `ExprAST*` pointers destructs correctly — and every node is plain
-data captured at construction time. The whole expression hierarchy:
+Every node is plain data captured at construction time. The tutorial's
+classes are exactly that and nothing more — a virtual destructor on the base
+so a tree held through `ExprAST*` destructs correctly, and constructors.
+Here each node carries two small additions that the tutorial defers (and
+then handles differently): a **kind tag** and **getters**. The whole
+expression hierarchy:
 
 **`Chapter2/include/ast.h`**
 ```cpp
 /// ExprAST - Base class for all expression nodes.
 class ExprAST {                                                   // [1]
 public:
+  /// Kind tag for LLVM-style RTTI: `llvm::isa<>`/`llvm::cast<>` use each
+  /// subclass's `classof()`, which compares against this tag.
+  enum ExprASTKind {
+    Expr_Num,
+    Expr_Var,
+    Expr_BinOp,
+    Expr_Call,
+  };
+
   virtual ~ExprAST() = default;
+
+  ExprASTKind getKind() const { return Kind; }
+
+protected:
+  // Only concrete nodes construct the base, each stamping its own tag.
+  // (Without a pure virtual, this is what keeps ExprAST abstract.)
+  ExprAST(ExprASTKind Kind) : Kind(Kind) {}
+
+private:
+  const ExprASTKind Kind;
 };
 
 /// NumberExprAST - Expression class for numeric literals like "1.0".
@@ -374,7 +369,11 @@ class NumberExprAST : public ExprAST {                            // [2]
   double Val;
 
 public:
-  NumberExprAST(double Val) : Val(Val) {}
+  NumberExprAST(double Val) : ExprAST(Expr_Num), Val(Val) {}
+
+  double getVal() const { return Val; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Num; }
 };
 
 /// VariableExprAST - Expression class for referencing a variable, like "a".
@@ -382,7 +381,11 @@ class VariableExprAST : public ExprAST {                          // [3]
   std::string Name;
 
 public:
-  VariableExprAST(const std::string &Name) : Name(Name) {}
+  VariableExprAST(const std::string &Name) : ExprAST(Expr_Var), Name(Name) {}
+
+  const std::string &getName() const { return Name; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Var; }
 };
 
 /// BinaryExprAST - Expression class for a binary operator.
@@ -393,7 +396,13 @@ class BinaryExprAST : public ExprAST {                            // [4]
 public:
   BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS,
                 std::unique_ptr<ExprAST> RHS)
-      : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+      : ExprAST(Expr_BinOp), Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+
+  char getOp() const { return Op; }
+  ExprAST *getLHS() const { return LHS.get(); }
+  ExprAST *getRHS() const { return RHS.get(); }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_BinOp; }
 };
 
 /// CallExprAST - Expression class for function calls.
@@ -404,14 +413,21 @@ class CallExprAST : public ExprAST {                              // [5]
 public:
   CallExprAST(const std::string &Callee,
               std::vector<std::unique_ptr<ExprAST>> Args)
-      : Callee(Callee), Args(std::move(Args)) {}
+      : ExprAST(Expr_Call), Callee(Callee), Args(std::move(Args)) {}
+
+  const std::string &getCallee() const { return Callee; }
+  const std::vector<std::unique_ptr<ExprAST>> &getArgs() const { return Args; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Call; }
 };
 ```
 
-- **[1] `ExprAST`** exists only so the other four can be held, moved, and
+- **[1] `ExprAST`** exists so the other four can be held, moved, and
   destroyed uniformly as `std::unique_ptr<ExprAST>` — which is what lets a
   `BinaryExprAST` hold *any* expression as an operand without knowing its
-  concrete kind.
+  concrete kind. It also owns the one piece of state every node shares: the
+  tag saying which concrete node this is. The constructor is `protected`,
+  so only a subclass can create one, and only while stamping its tag.
 - **[2] `NumberExprAST`** is a leaf: it captures the `double` the lexer
   stashed in `numVal`, and nothing else.
 - **[3] `VariableExprAST`** is the other leaf: just the referenced name.
@@ -425,16 +441,39 @@ public:
   function — linking name to definition is also codegen's job) and an owned
   vector of argument subtrees.
 
-Two things to notice:
+The tag and the `classof()` functions are **LLVM-style RTTI**. LLVM is built
+with `-fno-rtti`, so instead of `dynamic_cast` it uses a hand-rolled scheme:
+a base class stores a `Kind` enum set once by each subclass's constructor,
+every subclass provides `static bool classof(const Base*)` checking the tag,
+and the templates `llvm::isa<T>(x)`, `llvm::cast<T>(x)` and
+`llvm::dyn_cast<T>(x)` call `T::classof` under the hood. This directory
+links no LLVM, so nothing here calls those templates yet — the parser tests
+read `getKind()` directly — but the AST is already in the shape they expect,
+and Chapter 3's code generator uses them on it from its first line.
+
+Why give the tree tags and getters at all, when the tutorial's nodes get by
+with constructors alone? Because the tutorial's answer to "how does a later
+stage look inside a node?" is to add a virtual `codegen()` method to every
+node in Chapter 3 — which makes the AST depend on LLVM and puts backend code
+inside the frontend's data structure. With tags and getters, the tree is
+plain data any consumer can walk from the outside — a code generator, a
+pretty-printer, a type checker — without the nodes knowing those consumers
+exist. Chapter 3 explains the consequences for codegen; here the practical
+payoff is that the parser tests can assert on the *shape* of what the
+parser built, not just on whether it built something.
+
+Three things to notice:
 
 - **Ownership is strictly top-down.** Every child is a `std::unique_ptr`, so
   a `FunctionAST` owns its whole subtree; destroying the root frees the tree.
   This is why the parser passes nodes around with `std::move` — ownership
-  transfers up as productions complete.
-- **No behavior yet.** At this stage the nodes have no methods besides
-  constructors (a `codegen()` method arrives in Chapter 3). Because Kaleidoscope
-  has one type, there is also no type field anywhere — everything is a
-  `double`.
+  transfers up as productions complete. The getters hand out raw pointers
+  and references precisely because they do *not* transfer ownership: a
+  consumer looks, the tree keeps owning.
+- **No behavior.** The nodes have constructors and accessors, and nothing
+  that *does* anything — no evaluation, no printing, no code generation, in
+  this chapter or any later one. Because Kaleidoscope has one type, there
+  is also no type field anywhere — everything is a `double`.
 - **This is the complete expression vocabulary — and it cannot branch.**
   Nothing in the hierarchy expresses conditional control flow, so the
   language at this stage is **not Turing-complete**: every function body
@@ -454,6 +493,7 @@ public:
   PrototypeAST(const std::string &Name, std::vector<std::string> Args)
       : Name(Name), Args(std::move(Args)) {}
   const std::string &getName() const { return Name; }
+  const std::vector<std::string> &getArgs() const { return Args; }
 };
 
 class FunctionAST {
@@ -463,8 +503,13 @@ public:
   FunctionAST(std::unique_ptr<PrototypeAST> Proto,
               std::unique_ptr<ExprAST> Body)
       : Proto(std::move(Proto)), Body(std::move(Body)) {}
+  PrototypeAST *getProto() const { return Proto.get(); }
+  ExprAST *getBody() const { return Body.get(); }
 };
 ```
+
+(Neither is an expression, so neither has a kind tag — there is no
+`ExprAST*` through which they could be confused with anything else.)
 
 Keeping `PrototypeAST` separate (rather than folding it into `FunctionAST`)
 matters because `extern sin(a);` is a prototype *without* a body — the same
@@ -501,20 +546,32 @@ call each other exactly the way the productions reference each other. The
 name says how it runs — parsing starts at the topmost production and
 *descends* into sub-productions, and because the grammar is *recursive* (an
 expression can contain expressions), the functions are too. Here is
-Kaleidoscope's grammar; every line below becomes one `parse*` method:
+Kaleidoscope's grammar, top-down, exactly as the comments above each
+`parse*` method in `src/parser.cpp` (and above `mainLoop()` in
+`include/driver.h`) spell it — quoted text is a literal token, `|` an
+alternative, `*` zero or more repetitions:
 
 ```
-numberexpr     ::= number
-parenexpr      ::= '(' expression ')'
-identifierexpr ::= identifier | identifier '(' expression (',' expression)* ')'
-primary        ::= identifierexpr | numberexpr | parenexpr
-expression     ::= primary binoprhs
-binoprhs       ::= (binop primary)*
-prototype      ::= id '(' id* ')'
+top            ::= definition | external | toplevelexpr | ';'
 definition     ::= 'def' prototype expression
 external       ::= 'extern' prototype
 toplevelexpr   ::= expression
+prototype      ::= id '(' id* ')'
+expression     ::= primary binoprhs
+binoprhs       ::= ('+' primary)*
+primary        ::= identifierexpr | numberexpr | parenexpr
+identifierexpr ::= identifier | identifier '(' expression* ')'
+numberexpr     ::= number
+parenexpr      ::= '(' expression ')'
 ```
+
+Two of the comments abbreviate, as upstream's do: `'+'` in `binoprhs`
+stands for any binary operator (any character with a precedence-table
+entry), and the call form's arguments are comma-separated
+(`expression (',' expression)*`). Every rule except `top` becomes the
+`parse*` method that carries it as its comment; `top` is the driver's
+`mainLoop()`, which looks at the first token of each item and calls the
+matching entry point.
 
 The grammar-to-code mapping is mechanical, and a few concrete instances show
 the whole trick (each method appears in full later in this section):
@@ -530,9 +587,9 @@ the whole trick (each method appears in full later in this section):
 - `primary ::= identifierexpr | numberexpr | parenexpr` is a *choice*, so
   `parsePrimary()` is a `switch` on `curTok` — one token of lookahead
   decides which alternative applies.
-- the `(',' expression)*` *repetition* inside `identifierexpr` becomes the
-  argument loop in `parseIdentifierExpr()` — loop while the input can still
-  continue the repetition.
+- the `expression*` *repetition* in `identifierexpr` becomes the argument
+  loop in `parseIdentifierExpr()` — loop while the input can still continue
+  the repetition.
 
 ### The token buffer and error helpers
 
@@ -601,7 +658,7 @@ std::unique_ptr<ExprAST> Parser::parseParenExpr() {
 }
 ```
 
-The call to `parseExpression()` is recursive descent earning its keep: the
+The call to `parseExpression()` is where recursive descent pays off: the
 inner expression may itself contain parentheses, calls, anything, and this
 method neither knows nor cares — it just calls the production's function and
 gets a subtree back. Nesting to any depth costs zero extra code; it rides on
@@ -670,8 +727,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 }
 ```
 
-This is where "one token of lookahead" earns its keep: the current token
-alone determines which production applies, so the choice is a `switch` —
+This is what one token of lookahead buys: the current token alone
+determines which production applies, so the choice is a `switch` —
 and it is also why the three helpers above may safely *assume* their first
 token is already the right one.
 
@@ -715,6 +772,32 @@ Parsing then means: take the first primary as a provisional LHS, and consume
 pairs one at a time, deciding for each — by precedence — whether it attaches
 to the current LHS or belongs to something tighter.
 
+To start with, we need a table of precedences.
+
+**`Chapter2/include/parser.h`**
+```cpp
+class Parser {
+public:
+    Parser(Lexer& lexer) : lexer(lexer) {
+        binopPrecedence['<'] = 10;
+        binopPrecedence['+'] = 20;
+        binopPrecedence['-'] = 20;
+        binopPrecedence['*'] = 40;
+    }
+    ...
+
+  private:
+    Lexer& lexer;
+
+    /// CurTok/getNextToken - Provide a simple token buffer.
+    int curTok;  // Current token the parser is looking at
+
+    /// BinopPrecedence - This holds the precedence for each binary operator that is
+    /// defined.
+    std::map<char, int> binopPrecedence;
+};
+```
+
 The precedence lookup comes first. The table itself is filled in the `Parser`
 constructor — `'<'` → 10, `'+'`/`'-'` → 20, `'*'` → 40 — and the helper
 returns `-1` for anything that is not a binary operator at all:
@@ -729,47 +812,17 @@ int Parser::getTokPrecedence() {
 }
 ```
 
-The `-1` sentinel is doing quiet work: any non-operator token — `;`, `)`,
-`,`, EOF — fails every `tokPrec < exprPrec` comparison below, so the
+The `-1` sentinel matters more than it looks: any non-operator token — `;`,
+`)`, `,`, EOF — fails every `tokPrec < exprPrec` comparison below, so the
 pair-consuming loop simply stops at it. Expression parsing never needs an
 explicit "am I done?" check; running out of operators *is* the check.
+(Upstream reads the table through `operator[]`, which has a side effect the
+`find()` here avoids — see [Deviations from upstream](#deviations-from-upstream).)
 
-#### Deviation from upstream: `find()` instead of `operator[]`
-
-Upstream reads the table through `std::map::operator[]`:
-
-```cpp
-// upstream (LangImpl02)
-static int GetTokPrecedence() {
-  if (!isascii(CurTok))
-    return -1;
-
-  // Make sure it's a declared binop.
-  int TokPrec = BinopPrecedence[CurTok];
-  if (TokPrec <= 0) return -1;
-  return TokPrec;
-}
-```
-
-On a `std::map`, `operator[]` **default-inserts** an entry for every key it
-is asked about but does not find. Upstream is still correct — the freshly
-inserted `0` fails the `<= 0` check and comes out as `-1` — but as a side
-effect the precedence table silently grows a `{token, 0}` entry for every
-distinct non-operator ASCII token the parser ever peeks at (`;`, `)`, `,`,
-…). The refactored version uses `find()`, so the lookup answers the same
-question without mutating the table:
-
-| `curTok`                    | upstream                                        | refactored          |
-| --------------------------- | ----------------------------------------------- | ------------------- |
-| `'+'` (declared binop)      | 20                                              | 20                  |
-| `';'`, `')'`, `','`, …      | -1, **and `{token, 0}` inserted into the map**  | -1, map untouched   |
-| `tok_identifier` (negative) | -1 (fails the `isascii` check; no map lookup)   | same                |
-
-Every input yields the same precedence — the only observable difference is
-whether the map mutates.
-
-`parseExpression()` states the stream model directly — a primary, then
-whatever pairs follow:
+An expression, in this model, is a primary followed by zero or more
+`[binop, primary]` pairs — and `parseExpression()` says exactly that: parse
+one primary, then hand it to the pair-consuming loop as the provisional
+left-hand side:
 
 **`Chapter2/src/parser.cpp`**
 ```cpp
@@ -781,11 +834,15 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 }
 ```
 
-The `0` is the *minimum precedence* the callee is allowed to consume — and
-since every real operator has precedence above 0, this call means "take
-every pair you can".
+The `0` is the *minimum precedence* the callee is allowed to consume. Every
+real operator has a precedence above 0, so this call means "take every pair
+you can". Note that a bare `x` is a perfectly valid expression: `binoprhs`
+may match nothing at all, in which case `parseBinOpRHS` returns the LHS it
+was given, untouched.
 
-`parseBinOpRHS(exprPrec, lhs)` is the core of the technique:
+`parseBinOpRHS(exprPrec, lhs)` is the core of the technique. It takes the
+precedence floor and the expression parsed so far, and consumes pairs for as
+long as their operators clear the floor:
 
 **`Chapter2/src/parser.cpp`**
 ```cpp
@@ -818,43 +875,97 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int exprPrec, std::unique_ptr<Exp
 }
 ```
 
-Read it as a loop over `[binop, primary]` pairs. `exprPrec` is the method's
-contract with its caller: "only consume operators at least this strong;
-anything weaker belongs to you." The first line of the loop enforces it —
-if the pending operator is too weak (or is no operator at all, precedence
-`-1`), return whatever LHS has been accumulated so far.
+Three numbers drive the loop, and it helps to keep them apart:
 
-Having committed to a pair, the subtle moment arrives *after* parsing the
-pair's primary: which operator does that primary belong to? Peek at the
-*next* operator. If it binds no tighter than the current one, the primary
-belongs to the current operator — merge `lhs = lhs op rhs` and loop. If it
-binds *tighter*, the primary just parsed is really the start of a
-higher-precedence subexpression — so recurse with `tokPrec + 1`, letting the
-recursive call consume every pair stronger than the current operator, and
-use whatever it returns as the real RHS. The `+ 1` is precise: it means
-"strictly tighter than me", which both keeps equal-precedence operators in
-the caller's loop *and* is exactly what makes them left-associative.
+- **`exprPrec`** — the floor, fixed for the whole call. It is the method's
+  contract with its caller: "consume operators at least this strong;
+  anything weaker is yours." The top-level call passes 0; recursive calls
+  pass `tokPrec + 1`.
+- **`tokPrec`** — the precedence of the operator now in `curTok`, the one
+  about to be consumed. It is checked against the floor at the top of every
+  iteration; a non-operator scores `-1` and always fails, which is how the
+  loop ends at `;`, `)`, `,` or EOF without an explicit end check.
+- **`nextPrec`** — the precedence of the operator *after* the just-parsed
+  primary. This is the lookahead that decides who owns that primary.
 
-Tracing `a + b * c;`:
+Having committed to a pair and parsed its primary, the one subtle decision
+is: which operator does that primary belong to? Compare the two operators
+around it. If the next one binds no tighter than the current one
+(`nextPrec <= tokPrec`), the primary is the current operator's right
+operand: merge `lhs = lhs op rhs` and go round again. If the next one binds
+tighter, the primary is really the *start* of a higher-precedence
+subexpression, so recurse with `tokPrec + 1`: the recursive call consumes
+every pair that binds more tightly than the current operator and returns the
+whole run as one subtree, which then becomes the real RHS.
+
+Two properties follow from the floor being `tokPrec + 1` rather than
+`tokPrec`:
+
+- **Left associativity.** An operator of *equal* precedence fails the
+  recursive call's floor, so it is left for the caller's loop, which merges
+  what it already has first. `a - b - c` therefore becomes `(a - b) - c`,
+  never `a - (b - c)`. Passing `tokPrec` instead would make the operator
+  right-associative — the one-character change a language needs for `=` or
+  `^`. Chapter 6 reuses this loop unchanged for user-defined operators;
+  only the table grows.
+- **The recursion stays shallow.** A recursive call happens only when
+  precedence strictly *increases*, so the depth is bounded by the number of
+  distinct precedence levels (three here), not by the length of the
+  expression. Long runs of same-level operators are handled by the loop.
+
+One more invariant the caller relies on: **when `parseBinOpRHS` returns,
+`curTok` is either not an operator or an operator weaker than `exprPrec`.**
+That is what lets the caller resume its own loop on exactly the token the
+callee refused.
+
+Tracing `a + b * c - d;` — chosen because it has a tighter operator in the
+middle and a looser one after it, so both the recursion *and* the return to
+the caller's loop are exercised:
 
 ```
 parseExpression
   lhs = a
-  parseBinOpRHS(0, a)
-    tokPrec('+') = 20 ≥ 0    → eat '+', rhs = b
-    nextPrec('*') = 40 > 20  → '*' binds tighter than '+', so b belongs to it:
-      parseBinOpRHS(21, b)
-        tokPrec('*') = 40 ≥ 21 → eat '*', rhs = c
-        nextPrec(';') = -1     → no recursion
-        lhs = (b * c)
-        tokPrec(';') = -1 < 21 → return (b * c)
-    lhs = a + (b * c)
-    tokPrec(';') = -1 < 0    → return a + (b * c)
+  parseBinOpRHS(0, a)                               floor 0
+    iter 1: tokPrec('+') = 20 ≥ 0     → eat '+', rhs = b
+            nextPrec('*') = 40 > 20   → '*' binds tighter: b belongs to it
+              parseBinOpRHS(21, b)                  floor 21 = "tighter than '+'"
+                iter 1: tokPrec('*') = 40 ≥ 21  → eat '*', rhs = c
+                        nextPrec('-') = 20 ≤ 40 → no recursion
+                        lhs = (b * c)
+                iter 2: tokPrec('-') = 20 < 21  → '-' is too weak for this call:
+                        return (b * c)             leave it to the caller
+            lhs = a + (b * c)
+    iter 2: tokPrec('-') = 20 ≥ 0     → eat '-', rhs = d
+            nextPrec(';') = -1        → no recursion
+            lhs = (a + (b * c)) - d
+    iter 3: tokPrec(';') = -1 < 0     → return
 ```
 
-And the associativity case: in `a - b - c`, the second `'-'` has the *same*
-precedence as the first (20, not > 20), so there is no recursion — the loop
-merges `(a - b)` first and then `((a - b) - c)`.
+In prose: the outer call eats `+` and parses `b`, then sees `*` ahead. Since
+`*` outranks `+`, `b` cannot be `+`'s right operand yet, so the outer call
+recurses with floor 21. The inner call eats `*` and parses `c`, looks ahead,
+and finds `-` at precedence 20 — not tighter than `*` — so it merges `b * c`.
+On its next iteration `-` fails the floor of 21, and the inner call returns
+`(b * c)` with `curTok` still on `-`. Back in the outer call that subtree
+becomes `+`'s RHS: `a + (b * c)`. The outer loop continues: `-` clears the
+floor of 0, `d` is parsed, `;` ahead is no operator, so the merge happens at
+once: `(a + (b * c)) - d`. The final `;` fails the floor and the outer call
+returns. The resulting tree:
+
+```
+              '-'
+             /   \
+           '+'    d
+          /   \
+         a    '*'
+             /   \
+            b     c
+```
+
+Compare `a * b + c`, where the tighter operator comes *first*: `*` is eaten,
+`b` parsed, `+` ahead is weaker, so `a * b` merges at once with no recursion;
+then `+` clears the floor and `c` is merged: `(a * b) + c`. Recursion is only
+ever needed when precedence goes *up* mid-expression.
 
 ### Prototypes, definitions, externs, top-level expressions
 
@@ -885,8 +996,8 @@ std::unique_ptr<PrototypeAST> Parser::parsePrototype() {
 
 The parameter list explains the space-separated syntax: the `while` loop
 simply keeps accepting identifiers until something else appears — no commas
-expected — and that something must then be the `')'`. (This is also where
-`logErrorP` earns its existence: this production returns a
+expected — and that something must then be the `')'`. (This is also why
+`logErrorP` exists: this production returns a
 `PrototypeAST`, not an `ExprAST`, so it needs the error helper with the
 matching return type.)
 
@@ -940,23 +1051,55 @@ and print its value.
 
 ### The driver loop
 
-`mainLoop()` bootstraps the token buffer once, then dispatches on `curTok`
-forever. Top-level `';'` is simply eaten — and it exists for a reason: at an
-interactive prompt, after `4 + 5` the parser cannot know whether the
-expression is finished or about to continue as `4 + 5 * 6`. Typing `;` is
-the user saying "done" — `';'` has no precedence-table entry, so
-`getTokPrecedence()` returns `-1` and expression parsing stops there;
+Upstream's "Top-Level Parsing" section is a set of free functions
+(`HandleDefinition`, `HandleExtern`, `HandleTopLevelExpression`, `MainLoop`)
+that call the parser and report. They share the parser's `CurTok` global,
+which is the only reason they sit beside the parse functions. Here they are
+the methods of a separate class that *owns* the parser — and the lexer:
+
+**`Chapter2/include/driver.h`**
+```cpp
+class Driver {
+public:
+    Driver() : parser(lexer) {}
+
+    /// top ::= definition | external | toplevelexpr | ';'
+    void mainLoop();
+
+private:
+    void handleDefinition();
+    void handleExtern();
+    void handleTopLevelExpression();
+
+    // Declaration order matters: the parser holds a reference to the lexer.
+    Lexer lexer;
+    Parser parser;
+};
+```
+
+The parser exposes exactly two things the driver needs to run a loop over
+it: `getNextToken()` to advance, and `getCurToken()` to look at the token
+that stopped the last `parse*` call. (The member order is not cosmetic —
+C++ constructs members in declaration order, and `parser(lexer)` must find
+a constructed `lexer`.)
+
+`mainLoop()` bootstraps the token buffer once, then dispatches on the
+current token forever. Top-level `';'` is simply eaten — and it exists for a
+reason: at an interactive prompt, after `4 + 5` the parser cannot know
+whether the expression is finished or about to continue as `4 + 5 * 6`.
+Typing `;` is the user saying "done" — `';'` has no precedence-table entry,
+so `getTokPrecedence()` returns `-1` and expression parsing stops there;
 `mainLoop()` then discards the delimiter:
 
-**`Chapter2/src/parser.cpp`**
+**`Chapter2/src/driver.cpp`**
 ```cpp
-void Parser::mainLoop() {
-    getNextToken(); // Bootstrap the first token
+void Driver::mainLoop() {
+    parser.getNextToken(); // Bootstrap the first token
     while (true) {
         fprintf(stderr, "ready> ");
-        switch (curTok) {
+        switch (parser.getCurToken()) {
         case tok_eof: return;
-        case ';':     getNextToken(); break;  // ignore top-level semicolons.
+        case ';':     parser.getNextToken(); break;  // ignore top-level semicolons.
         case tok_def: handleDefinition(); break;
         case tok_extern: handleExtern(); break;
         default:      handleTopLevelExpression(); break;
@@ -965,44 +1108,31 @@ void Parser::mainLoop() {
 }
 ```
 
-Each `handle*` wrapper prints `Parsed a ...` on success; on failure the error
-helpers have already printed `Error: ...`, and the handler eats one token for
-**error recovery** so the loop can resynchronize instead of crashing — the
-behavior `test/filecheck/parse-error.k` pins down.
+Each `handle*` wrapper calls one parser entry point and prints `Parsed a ...`
+on success; on failure the error helpers have already printed `Error: ...`,
+and the handler eats one token for **error recovery** so the loop can
+resynchronize instead of crashing — the behavior
+`test/filecheck/parse-error.k` pins down:
 
-#### Deviation from upstream: token priming moved into `mainLoop()`
-
-Upstream bootstraps the token buffer in `main()`, printing a first prompt
-before doing so:
-
+**`Chapter2/src/driver.cpp`**
 ```cpp
-// upstream (LangImpl02)
-int main() {
-  ...
-  // Prime the first token.
-  fprintf(stderr, "ready> ");
-  getNextToken();
-
-  // Run the main "interpreter loop" now.
-  MainLoop();
-  ...
+void Driver::handleDefinition() {
+  if (parser.parseDefinition()) {
+    fprintf(stderr, "Parsed a function definition.\n");
+  } else {
+    // Skip token for error recovery.
+    parser.getNextToken();
+  }
 }
 ```
 
-That split only exists because upstream's `CurTok` is a file-scope global
-that `main()` and `MainLoop()` share. The refactored `main()`
-(`src/main.cpp`) just constructs the `Lexer` and `Parser` and calls
-`parser.mainLoop()`; the bootstrap `getNextToken()` is the first line of
-`mainLoop()` itself, so the token buffer stays entirely the `Parser`'s
-business and callers need no "prime first, then loop" protocol. The
-trade-off is one visible behavior change at startup: the bootstrap read
-blocks *before* the loop prints its first prompt.
+The `if` is where the pipeline's next stage will go: Chapter 3 replaces the
+`fprintf` with a call into the code generator and a print of the IR it
+returns. The parser does not change for that — only this class does.
 
-|                       | upstream                            | refactored                    |
-| --------------------- | ----------------------------------- | ----------------------------- |
-| at startup            | prints `ready> `, waits for input   | waits for input, no prompt    |
-| first line of input   | typed after a prompt                | typed with no prompt showing  |
-| after the first token | identical                           | identical                     |
+(Upstream primes the first token in `main()` rather than here, which changes
+when the first prompt appears — see
+[Deviations from upstream](#deviations-from-upstream).)
 
 ### The call graph: the whole parser at a glance
 
@@ -1011,7 +1141,7 @@ graph mirrors the grammar one-to-one — each arrow below is a production
 referencing another production:
 
 ```
- mainLoop()  ── dispatch on curTok ──┐
+ Driver::mainLoop()  ── dispatch on parser.getCurToken() ──┐
    ├─ tok_def    ─▶ handleDefinition()        ─▶ parseDefinition()
    │                                                ├─▶ parsePrototype()
    │                                                └─▶ parseExpression()
@@ -1034,11 +1164,12 @@ referencing another production:
                                                   operator binds tighter
 ```
 
-The graph has two tiers. The **driver tier** (top) is straight-line dispatch:
-`mainLoop()` looks at the *first token* of each top-level item — `def`,
-`extern`, or anything else — and routes it through a `handle*` wrapper to the
-matching entry point. Nothing up here recurses; it runs once per top-level
-item. The **expression tier** (bottom) is where all the real structure
+The graph has two tiers. The **driver tier** (top, in `Driver`) is
+straight-line dispatch: `mainLoop()` looks at the *first token* of each
+top-level item — `def`, `extern`, or anything else — and routes it through a
+`handle*` wrapper to the matching `Parser` entry point. Nothing up here
+recurses; it runs once per top-level item. The **expression tier** (bottom,
+in `Parser`) is where all the real structure
 lives, and it is a cycle machine — three back-edges, each with a distinct
 job:
 
@@ -1057,7 +1188,7 @@ loop consumes at least one token, and the input is finite.
 Tracing one full input through the graph — `def foo(x y) x + foo(y, 4.0);`:
 
 ```
-mainLoop: curTok = tok_def
+Driver::mainLoop: getCurToken() = tok_def
 └▶ handleDefinition ─▶ parseDefinition
     ├▶ parsePrototype              → "foo", params [x, y]
     └▶ parseExpression             → the body
@@ -1078,6 +1209,174 @@ That completes the frontend: it validates Kaleidoscope input grammatically
 and builds an AST for everything valid, but produces nothing beyond the
 `Parsed a ...` reports — turning the tree into executable code starts in
 Chapter 3.
+
+## Deviations from upstream
+
+Chapter2–9 keep the tutorial's behavior, quirks included. This chapter
+differs from it in three places, each small and deliberate; they are
+collected here so the main narrative above can follow the tutorial's order
+undisturbed. Each one is pinned by a test.
+
+### Leading-dot handling in the number path
+
+The one deliberate change to `gettok()` is in the number-lexing branch. The
+tutorial's version is the naive loop:
+
+```cpp
+// upstream (LangImpl01)
+if (isdigit(LastChar) || LastChar == '.') { // Number: [0-9.]+
+  std::string NumStr;
+  do {
+    NumStr += LastChar;
+    LastChar = getchar();
+  } while (isdigit(LastChar) || LastChar == '.');
+  NumVal = strtod(NumStr.c_str(), nullptr);
+  return tok_number;
+}
+```
+
+This has a real bug the tutorial itself points out: *anything* starting with
+`.` becomes a number. A lone `.` produces `NumStr = "."`, and `strtod(".")`
+silently yields `0.0` — so typing `.` gives you the number zero instead of an
+error.
+
+The refactored branch (quoted in full in [Chapter 1](#chapter-1-the-lexer))
+validates the leading dot before committing to the number path. The added
+lines are the peek:
+
+**`Chapter2/src/lexer.cpp`**
+```cpp
+    if (lastChar == '.') {
+        // If we see a dot, it must be followed by a digit to be a valid number.
+        int nextChar = getchar();
+        if (!isdigit(nextChar)) {
+            // Not a valid number, return the dot as a token.
+            lastChar = nextChar;  // stash the lookahead for the next gettok() call
+            return '.';
+        }
+        numStr += "0.";      // prepend a zero for numbers like ".5"
+        lastChar = nextChar; // continue lexing from the digit after the dot
+    }
+```
+
+As a flow chart:
+
+```
+ lastChar ∈ [0-9] or '.'
+        │
+        ├── lastChar == '.' ─── peek: nextChar = getchar()
+        │        │
+        │        ├── nextChar is NOT a digit ──▶ lastChar = nextChar
+        │        │        (".", ".x", "..")      return '.'  (plain ASCII token)
+        │        │
+        │        └── nextChar IS a digit ─────▶ numStr = "0."
+        │                 (".5")                 lastChar = nextChar, fall through
+        ▼
+ do { numStr += lastChar; lastChar = getchar(); }
+ while (isdigit(lastChar) || lastChar == '.')
+        │
+        ▼
+ numVal = strtod(numStr);  return tok_number
+```
+
+Step by step, the change does three things:
+
+1. **Peek one character past the dot.** Since the dot alone is ambiguous
+   (start of `.5`? stray punctuation?), the lexer reads one more character to
+   decide. If it is not a digit, the dot was not a number after all: `gettok`
+   returns `'.'` as an ordinary ASCII token, exactly like any other unknown
+   character.
+2. **Preserve the lookahead invariant.** The peeked character has already
+   been consumed from stdin, so it must be stored back into `lastChar` before
+   returning — otherwise the next `gettok()` call would skip it. This is the
+   same "read but not yet processed" bookkeeping `lastChar` does everywhere
+   else in the lexer.
+3. **Normalize `.5` to `"0.5"` for `strtod`.** When a digit does follow,
+   `numStr += "0."` seeds the buffer with an explicit leading zero, and
+   `lastChar` is set to the digit so the ordinary do-while loop below takes
+   over unchanged. The dot itself is never appended twice — it only enters
+   `numStr` via the `"0."` prefix.
+
+Behavior comparison:
+
+| input     | upstream                              | refactored                            |
+| --------- | ------------------------------------- | ------------------------------------- |
+| `.5`      | `tok_number` 0.5 (`strtod(".5")`)     | `tok_number` 0.5 (`strtod("0.5")`)    |
+| `.`       | `tok_number` **0.0** (silent)         | `'.'` ASCII token                     |
+| `.x`      | `tok_number` 0.0, then `x`            | `'.'` token, then identifier `x`      |
+| `3.14.15` | `tok_number` 3.14 (strtod stops at 2nd dot) | same — quirk deliberately kept  |
+
+The multi-dot quirk (`3.14.15` consumed as one token, `strtod` stopping at the
+second dot) is upstream behavior and is intentionally preserved, per the
+Chapter2–9 policy of keeping the tutorial's behavior except where noted.
+
+### `find()` instead of `operator[]` in `getTokPrecedence()`
+
+Upstream reads the table through `std::map::operator[]`:
+
+```cpp
+// upstream (LangImpl02)
+static int GetTokPrecedence() {
+  if (!isascii(CurTok))
+    return -1;
+
+  // Make sure it's a declared binop.
+  int TokPrec = BinopPrecedence[CurTok];
+  if (TokPrec <= 0) return -1;
+  return TokPrec;
+}
+```
+
+On a `std::map`, `operator[]` **default-inserts** an entry for every key it
+is asked about but does not find. Upstream is still correct — the freshly
+inserted `0` fails the `<= 0` check and comes out as `-1` — but as a side
+effect the precedence table silently grows a `{token, 0}` entry for every
+distinct non-operator ASCII token the parser ever peeks at (`;`, `)`, `,`,
+…). The refactored version uses `find()`, so the lookup answers the same
+question without mutating the table:
+
+| `curTok`                    | upstream                                        | refactored          |
+| --------------------------- | ----------------------------------------------- | ------------------- |
+| `'+'` (declared binop)      | 20                                              | 20                  |
+| `';'`, `')'`, `','`, …      | -1, **and `{token, 0}` inserted into the map**  | -1, map untouched   |
+| `tok_identifier` (negative) | -1 (fails the `isascii` check; no map lookup)   | same                |
+
+Every input yields the same precedence — the only observable difference is
+whether the map mutates.
+
+### Token priming moved into `mainLoop()`
+
+Upstream bootstraps the token buffer in `main()`, printing a first prompt
+before doing so:
+
+```cpp
+// upstream (LangImpl02)
+int main() {
+  ...
+  // Prime the first token.
+  fprintf(stderr, "ready> ");
+  getNextToken();
+
+  // Run the main "interpreter loop" now.
+  MainLoop();
+  ...
+}
+```
+
+That split only exists because upstream's `CurTok` is a file-scope global
+that `main()` and `MainLoop()` share. The refactored `main()`
+(`src/main.cpp`) just constructs the `Driver` and calls `mainLoop()`; the
+bootstrap `parser.getNextToken()` is the first line of `Driver::mainLoop()`
+itself, so priming is part of running the loop and callers need no "prime
+first, then loop" protocol. The trade-off is one visible behavior change at
+startup: the bootstrap read blocks *before* the loop prints its first
+prompt.
+
+|                       | upstream                            | refactored                    |
+| --------------------- | ----------------------------------- | ----------------------------- |
+| at startup            | prints `ready> `, waits for input   | waits for input, no prompt    |
+| first line of input   | typed after a prompt                | typed with no prompt showing  |
+| after the first token | identical                           | identical                     |
 
 ## Build and run
 
@@ -1105,7 +1404,7 @@ cmake --build build
 
 Example session — the same input as the Chapter 2 tutorial's, shown as this
 binary actually behaves. Because the first token is primed inside
-`mainLoop()` (see the deviation subsection in "The driver loop"), no
+`mainLoop()` (see [Deviations from upstream](#deviations-from-upstream)), no
 `ready>` prompt appears until the first line has been typed:
 
 ```
@@ -1150,6 +1449,13 @@ cover the class-level contracts of `Lexer` and `Parser`:
   pinning down component behavior precisely (number edge cases like `.5` and
   `3.14.15`, comment skipping, which malformed inputs each parser production
   rejects), independently of the driver or the other components.
+  `parser_test.cpp` has two layers of its own: the parameterized suites ask
+  "did this input parse, or fail as it should?", and `ParseTreeTest` walks
+  the returned tree through the AST getters to ask "into *what*?" — pinning
+  the operator-precedence algorithm's output for the README's own trace
+  (`a + b * c - d` → `((a + (b * c)) - d)`), left associativity, the
+  tighter-operator-first case, that parentheses leave no node behind, and
+  the argument list of a call.
 
 - **lit + FileCheck end-to-end tests** (`test/filecheck/*.k`) test the
   **whole compiler as a black box**: real `.k` source goes in through the

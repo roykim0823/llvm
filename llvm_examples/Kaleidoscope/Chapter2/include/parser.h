@@ -8,6 +8,7 @@
 #include "lexer.h"
 
 namespace toy {
+
 class Parser {
 public:
     Parser(Lexer& lexer) : lexer(lexer) {
@@ -17,11 +18,9 @@ public:
         binopPrecedence['*'] = 40;
     }
 
-    void mainLoop();
+    int getCurToken() const { return curTok; }  // The token the parser is looking at
     int getNextToken();  // Reads another token from the lexer and updates curTok
     int getTokPrecedence();
-
-
 
     std::unique_ptr<ExprAST> parseExpression();
     std::unique_ptr<ExprAST> parseNumberExpr();
@@ -34,14 +33,8 @@ public:
     std::unique_ptr<FunctionAST> parseTopLevelExpr();  // simple wrapper for top-level-expression
     std::unique_ptr<PrototypeAST> parseExtern();
 
-    // Top-level parsing and JIT driver
-    void handleDefinition();
-    void handleExtern();
-    void handleTopLevelExpression();
-
   private:
     Lexer& lexer;
-
     /// CurTok/getNextToken - Provide a simple token buffer.
     int curTok;  // Current token the parser is looking at
 

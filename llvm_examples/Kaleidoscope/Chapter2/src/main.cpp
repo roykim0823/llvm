@@ -1,12 +1,10 @@
-#include "lexer.h"
-#include "parser.h"
+#include "driver.h"
 
 int main() {
-    toy::Lexer lexer;
-    toy::Parser parser(lexer);
+    toy::Driver driver;
 
     // Run the main "interpreter loop" now.
-    parser.mainLoop();
+    driver.mainLoop();
 
     return 0;
 }

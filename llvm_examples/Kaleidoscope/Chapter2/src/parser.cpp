@@ -1,5 +1,3 @@
-#include <cstdio>
-
 #include "parser.h"
 #include "log.h"
 
@@ -158,46 +156,4 @@ std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
 std::unique_ptr<PrototypeAST> Parser::parseExtern() {
     getNextToken(); // eat extern
     return parsePrototype();
-}
-
-void Parser::handleDefinition() {
-  if (parseDefinition()) {
-    fprintf(stderr, "Parsed a function definition.\n");
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::handleExtern() {
-  if (parseExtern()) {
-    fprintf(stderr, "Parsed an extern\n");
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::handleTopLevelExpression() {
-  // Evaluate a top-level expression into an anonymous function.
-  if (parseTopLevelExpr()) {
-    fprintf(stderr, "Parsed a top-level expr\n");
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::mainLoop() {
-    getNextToken(); // Bootstrap the first token
-    while (true) {
-        fprintf(stderr, "ready> ");
-        switch (curTok) {
-        case tok_eof: return;
-        case ';':     getNextToken(); break;  // ignore top-level semicolons.
-        case tok_def: handleDefinition(); break;
-        case tok_extern: handleExtern(); break;
-        default:      handleTopLevelExpression(); break;
-        }
-    }
 }
