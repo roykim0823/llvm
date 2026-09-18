@@ -30,6 +30,7 @@ add_library(toy_core STATIC
     src/lexer.cpp
     src/parser.cpp
     src/codegen.cpp
+    src/driver.cpp
     src/log.cpp
 )
 target_include_directories(toy_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

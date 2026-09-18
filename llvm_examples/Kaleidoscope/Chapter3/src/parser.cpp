@@ -1,5 +1,3 @@
-#include <cstdio>
-
 #include "parser.h"
 #include "log.h"
 
@@ -158,63 +156,4 @@ std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
 std::unique_ptr<PrototypeAST> Parser::parseExtern() {
     getNextToken(); // eat extern
     return parsePrototype();
-}
-
-void Parser::handleDefinition() {
-  if (auto FnAST = parseDefinition()) {
-    if (auto *FnIR = FnAST->codegen(ctx)) {
-      fprintf(stderr, "Read function definition:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-    }
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::handleExtern() {
-  if (auto ProtoAST = parseExtern()) {
-    if (auto *FnIR = ProtoAST->codegen(ctx)) {
-      fprintf(stderr, "Read extern:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-    }
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::handleTopLevelExpression() {
-  // Evaluate a top-level expression into an anonymous function.
-  if (auto FnAST = parseTopLevelExpr()) {
-    if (auto *FnIR = FnAST->codegen(ctx)) {
-      fprintf(stderr, "Read top-level expression:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-
-      // Remove the anonymous expression.
-      FnIR->eraseFromParent();
-    }
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::mainLoop() {
-    getNextToken(); // Bootstrap the first token
-    while (true) {
-        fprintf(stderr, "ready> ");
-        switch (curTok) {
-        case tok_eof: return;
-        case ';':     getNextToken(); break;  // ignore top-level semicolons.
-        case tok_def: handleDefinition(); break;
-        case tok_extern: handleExtern(); break;
-        default:      handleTopLevelExpression(); break;
-        }
-    }
-    // NOTE: unreachable module dump removed -- the loop above only exits via
-    // 'return' on tok_eof, so code after it never ran.
 }
