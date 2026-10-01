@@ -13,6 +13,14 @@ find_package(LLVM REQUIRED CONFIG)
 message("Found LLVM ${LLVM_PACKAGE_VERSION}, build type ${LLVM_BUILD_TYPE}")
 list(APPEND CMAKE_MODULE_PATH ${LLVM_DIR})
 
+# LLVM's config runs find_package(ZLIB), which may resolve to a different SDK
+# (e.g. MacOSX.sdk) than the compiler's implicit sysroot. The resulting
+# -isystem <SDK>/usr/include lands before libc++ headers and breaks <cctype> etc.
+# zlib.h is reachable through the sysroot anyway, so drop the explicit path.
+if(APPLE AND TARGET ZLIB::ZLIB)
+  set_property(TARGET ZLIB::ZLIB PROPERTY INTERFACE_INCLUDE_DIRECTORIES "")
+endif()
+
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
