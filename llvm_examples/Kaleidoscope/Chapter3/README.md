@@ -806,8 +806,10 @@ void Driver::handleDefinition() {          void Driver::handleDefinition() {
 `Chapter3/CMakeLists.txt` — adds `src/codegen.cpp` and `src/driver.cpp` to
 `toy_core`, registers the `codegen_test` executable, and — new this chapter —
 finds LLVM, links the `core` component, and pins the macOS deployment target
-to match the Homebrew LLVM libraries (Chapter2, like upstream's Chapter 2,
-has no LLVM build dependency at all).
+and SDK sysroot so this project and the Homebrew LLVM libraries agree (see
+the top-level README's [Build and run](../README.md#build-and-run) for what
+each pin prevents; Chapter2, like upstream's Chapter 2, has no LLVM build
+dependency at all).
 
 `Chapter3/cmd.txt` — new demo input matching the chapter (functions worth
 looking at as IR).

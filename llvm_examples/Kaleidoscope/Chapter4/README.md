@@ -14,7 +14,7 @@ Chapter 3) is the weakest form — it is *local*, looking only at the one
 instruction being created. A pass sees a whole function at once, so it can
 spot what no single-instruction view can: that `(1+2+x)*(x+(1+2))` computes
 the same `x+3` twice. Passes come with a granularity — per **function** or
-per whole **module**; a REPL wants per-function ("as the user types"), which
+per whole **module**; a REPL (read-eval-print loop) wants per-function ("as the user types"), which
 is what a `FunctionPassManager` runs. Alongside *transform* passes LLVM has
 *analysis* passes (dominators, alias info, ...) whose results transforms
 consume and which a set of **analysis managers** computes and caches.
@@ -42,37 +42,60 @@ Compilation); the tutorial wraps it in a ~100-line `KaleidoscopeJIT` class.
 
 Reference: [Chapter 4: Adding JIT and Optimizer Support](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl04.html).
 Lexer, parser, and the AST are untouched (see [Chapter2](../Chapter2/README.md));
-the codegen basics are in [Chapter3](../Chapter3/README.md). This README
-covers what Chapter 4 adds.
+the codegen architecture — the `CodeGenSession` facade over a private `Impl`,
+the kind-tag dispatch, the `Driver` — is in [Chapter3](../Chapter3/README.md).
+This README covers what Chapter 4 adds.
 
-Concretely, the additions all live in the codegen layer and the driver:
+Concretely, the additions land in exactly the two places Chapter3 set up for
+them. The private `Impl` grows the optimizer and the prototype registry; the
+public facade gains two methods; and the driver gains the JIT:
 
 ```
-  handleDefinition / handleTopLevelExpression (parser.cpp)
-        │ AST->codegen(ctx)
-        ▼
-  ┌──────────────────────────────────────────────────────────────────┐
-  │ toy::IRGenContext  — grown considerably this chapter             │
-  │   theContext/theModule/builder/namedValues   (as in Chapter3)   │
-  │   theFPM + 4 analysis managers  — per-function optimization      │
-  │   theJIT : orc::KaleidoscopeJIT — owns all executed code         │
-  │   functionProtos : map<string, PrototypeAST> — prototype registry│
-  │   InitializeModuleAndPassManager() — fresh module + fresh FPM    │
-  └──────────────────────────────────────────────────────────────────┘
-        │ FunctionAST::codegen ends with theFPM->run(F)   (optimize)
-        ▼
-  module handed to theJIT (addModule) ── fresh module opened ──▶ next input
-        │ lookup("__anon_expr") → double(*)()
-        ▼
-  fprintf("Evaluated to %f\n", FP())
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │ toy::Driver  (driver.h / driver.cpp)                                         │
+  │   + theJIT : orc::KaleidoscopeJIT   — owns all executed code (NEW)           │
+  │   ctor: InitializeNativeTarget*, Create() JIT, codegen.setDataLayout(...)    │
+  │                                                                              │
+  │   handleDefinition:    emitFunction ─▶ print ─▶ addModule(takeModule())      │
+  │   handleExtern:        emitPrototype ─▶ print                                │
+  │   handleTopLevelExpr:  emitFunction ─▶ print ─▶ addModule(takeModule(), RT)  │
+  │                        ─▶ lookup("__anon_expr") ─▶ call ─▶ "Evaluated to"    │
+  └──────────────────────────────────────────────────────────────────────────────┘
+                     │ emit*()                    │ takeModule()  ▲ setDataLayout()
+                     ▼                            ▼               │
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │ toy::CodeGenSession  — facade (codegen.h)                                    │
+  │   emitPrototype()  emitFunction()  currentModule()      (as in Chapter3)     │
+  │   takeModule() ─▶ ThreadSafeModule    setDataLayout(DataLayout)   (NEW)      │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │ CodeGenSession::Impl  (codegen.cpp)                                          │
+  │   theContext / theModule / builder / namedValues        (as in Chapter3)     │
+  │   theFPM + 4 analysis managers + instrumentation  — per-function opt  (NEW)  │
+  │   functionProtos : map<string, PrototypeAST>      — prototype registry (NEW) │
+  │   dataLayout     : optional<DataLayout>           — stamped on each module   │
+  │   initializeModule()  — fresh module + fresh pass managers                   │
+  │   take()              — tear down, move module+context out, initializeModule │
+  │   getFunction(name)   — module lookup, else re-declare from the registry     │
+  └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 One design consequence dominates this chapter: **once a module is handed to
 the JIT it is frozen** — the JIT owns it and nothing can be added to it. So
 the REPL opens a **fresh module for every definition and every top-level
-expression** (`InitializeModuleAndPassManager()`), and cross-module calls are
-made to work by re-declaring known functions into each new module from the
-`functionProtos` registry.
+expression** (`takeModule()` moves the finished one out and `Impl` opens the
+next), and cross-module calls are made to work by re-declaring known
+functions into each new module from the `functionProtos` registry.
+
+Where Chapter3's design pays off is *who knows what*. Upstream puts
+`TheJIT` next to `TheModule` in the codegen globals and has the parser's
+`Handle*` functions drive it. Here the code generator never sees a JIT: it
+produces modules and hands them out through `takeModule()`, and the driver —
+the one component that owns both — decides whether a module stays resident
+(a definition) or is run once and freed (a top-level expression). The only
+thing codegen needs *from* the JIT is its data layout, which the driver
+passes in once with `setDataLayout()`. That is also why the public header
+changes in this chapter and then stays fixed until Chapter 9: `takeModule()`
+and `setDataLayout()` are the whole "codegen for a JIT" interface.
 
 (A precise file-by-file diff against Chapter3 is in
 [File-by-file](#file-by-file-what-changed-from-chapter3) near the end.)
@@ -135,21 +158,51 @@ simply defer the optimizer until the whole file is parsed — whole-**module**
 passes can then look across as much code as possible (at link time, a
 substantial portion of the entire program).
 
-The setup (in `InitializeModuleAndPassManager()`, so it is rebuilt with
-every fresh module) opens the new module, then creates the pass manager,
-the analysis managers, and the four transform passes, and wires the analysis
-side up via `PassBuilder`:
+The pass managers are members of the private `Impl`, next to the context and
+module they operate on — the tutorial's `TheFPM`, `TheLAM`, ... globals:
 
-**`Chapter4/include/ir_gen_ctx.h`**
+**`Chapter4/src/codegen.cpp`**
 ```cpp
-void InitializeModuleAndPassManager() {
+struct CodeGenSession::Impl {
+  std::unique_ptr<llvm::LLVMContext> theContext;
+  std::unique_ptr<llvm::Module> theModule;
+  std::unique_ptr<llvm::IRBuilder<>> builder;
+  std::map<std::string, llvm::Value *> namedValues;
+
+  // Chapter 4.2 additions: the per-function optimization pipeline.
+  std::unique_ptr<llvm::FunctionPassManager> theFPM;
+  std::unique_ptr<llvm::LoopAnalysisManager> theLAM;
+  std::unique_ptr<llvm::FunctionAnalysisManager> theFAM;
+  std::unique_ptr<llvm::CGSCCAnalysisManager> theCGAM;
+  std::unique_ptr<llvm::ModuleAnalysisManager> theMAM;
+  std::unique_ptr<llvm::PassInstrumentationCallbacks> thePIC;
+  std::unique_ptr<llvm::StandardInstrumentations> theSI;
+
+  // Chapter 4.3 additions: cross-module support.
+  std::map<std::string, PrototypeAST> functionProtos;
+  std::optional<llvm::DataLayout> dataLayout;
+
+  Impl() { initializeModule(); }
+  // ...
+};
+```
+
+The setup — upstream's `InitializeModuleAndPassManager()`, here
+`initializeModule()`, called by the constructor and again after every
+hand-off so the pipeline is rebuilt with every fresh module — opens the new
+module, then creates the pass manager, the analysis managers, and the four
+transform passes, and wires the analysis side up via `PassBuilder`:
+
+**`Chapter4/src/codegen.cpp`**
+```cpp
+  void initializeModule() {
     // Open a new context and module.
     theContext = std::make_unique<llvm::LLVMContext>();
     theModule = std::make_unique<llvm::Module>("my cool jit", *theContext);
 
     // set the data layout of the module to match the target machine's data layout.
-    // This is important for ensuring that the generated code is compatible with the target architecture.
-    theModule->setDataLayout(theJIT->getDataLayout());
+    if (dataLayout)
+      theModule->setDataLayout(*dataLayout);
 
     // Create a new builder for the module.
     builder = std::make_unique<llvm::IRBuilder<>>(*theContext);
@@ -162,7 +215,7 @@ void InitializeModuleAndPassManager() {
     theMAM = std::make_unique<llvm::ModuleAnalysisManager>();
     thePIC = std::make_unique<llvm::PassInstrumentationCallbacks>();
     theSI = std::make_unique<llvm::StandardInstrumentations>(*theContext,
-                                                 /*DebugLogging*/ true);
+                                                              /*DebugLogging*/ true);
     theSI->registerCallbacks(*thePIC, theMAM.get());
 
     // Add transform passes.
@@ -176,7 +229,7 @@ void InitializeModuleAndPassManager() {
     PB.registerModuleAnalyses(*theMAM);
     PB.registerFunctionAnalyses(*theFAM);
     PB.crossRegisterProxies(*theLAM, *theFAM, *theCGAM, *theMAM);
-}
+  }
 ```
 
 Why so much scaffolding for four passes: in LLVM's new pass manager,
@@ -190,17 +243,21 @@ The four transform passes themselves are, in upstream's words, "a pretty
 standard set of 'cleanup' optimizations that are useful for a wide variety
 of code" — a good starting place, not a tuned pipeline.
 
-Running the pipeline is one line at the end of `FunctionAST::codegen()`,
+(One line differs from upstream's version of this function: the data layout
+comes from `dataLayout`, set by the driver, not from a JIT — see
+[Deviations from upstream](#deviations-from-upstream).)
+
+Running the pipeline is one line at the end of `emitFunction()`,
 right after `verifyFunction` — every function is optimized the moment it is
 generated:
 
 **`Chapter4/src/codegen.cpp`**
 ```cpp
-    // Validate the generated code, checking for consistency.
-    llvm::verifyFunction(*TheFunction);
+      // Validate the generated code, checking for consistency.
+      llvm::verifyFunction(*TheFunction);
 
-    // Optimize the function.
-    ctx.theFPM->run(*TheFunction, *ctx.theFAM);
+      // Optimize the function.
+      theFPM->run(*TheFunction, *theFAM);
 ```
 
 The `FunctionPassManager` optimizes and updates the `Function*` **in place**
@@ -258,28 +315,61 @@ its internals matter to the driver:
   restricting the symbols JIT'd code may see for security, dynamic code
   generation keyed on symbol names, even lazy compilation.)
 - `addModule` takes a `ThreadSafeModule`, which owns *both* the module and
-  its `LLVMContext` — which is why the driver moves both out of the
-  `IRGenContext` and immediately rebuilds them.
+  its `LLVMContext` — which is why `takeModule()` moves both out of the
+  `Impl` and immediately rebuilds them.
 
-The JIT machinery is initialized once in the `IRGenContext` constructor —
-including the target setup that all native codegen needs:
+### The driver owns the JIT
 
-**`Chapter4/include/ir_gen_ctx.h`**
+Upstream stores `TheJIT` beside the codegen globals and initializes it in
+`main()`. Here it is a member of `Driver`, created in the driver's
+constructor together with the target setup that all native codegen needs:
+
+**`Chapter4/include/driver.h`**
 ```cpp
-IRGenContext() {
-    llvm::InitializeNativeTarget();            // the host's codegen backend
-    llvm::InitializeNativeTargetAsmPrinter();
-    llvm::InitializeNativeTargetAsmParser();
+class Driver {
+public:
+    Driver();
+    void mainLoop();
 
-    theJIT = ExitOnErr(llvm::orc::KaleidoscopeJIT::Create());
-    InitializeModuleAndPassManager();          // open the first module
+private:
+    void handleDefinition();
+    void handleExtern();
+    void handleTopLevelExpression();
+
+    Lexer lexer;
+    Parser parser;
+    CodeGenSession codegen;
+    llvm::ExitOnError ExitOnErr;
+    std::unique_ptr<llvm::orc::KaleidoscopeJIT> theJIT;
+};
+```
+
+**`Chapter4/src/driver.cpp`**
+```cpp
+Driver::Driver() : parser(lexer) {
+  // Set up the host target so the JIT can emit native code.
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+  llvm::InitializeNativeTargetAsmParser();
+
+  // Initialize the JIT.  This takes ownership of the process control object, and will clean it up on destruction.
+  theJIT = ExitOnErr(llvm::orc::KaleidoscopeJIT::Create());
+
+  // Every module the session opens must carry the JIT's data layout.
+  codegen.setDataLayout(theJIT->getDataLayout());
 }
 ```
 
-`InitializeModuleAndPassManager()` also stamps the JIT's data layout onto
-each fresh module (`theModule->setDataLayout(theJIT->getDataLayout())`) so
-the IR is generated with the exact type sizes/alignment the JIT will compile
-for.
+The three `InitializeNativeTarget*` calls register the host CPU's backend
+(the instruction selector, the assembly printer and parser) with LLVM —
+without them, ORC has nothing to compile with. `ExitOnErr` is LLVM's
+"unwrap or die" helper for `Expected<T>`/`Error`: a JIT that cannot be
+created is not something a REPL can recover from, so upstream's policy of
+terminating is kept. The last line is the only coupling between the code
+generator and the JIT, and it flows in one direction: the session is told
+which data layout (type sizes, alignments, pointer width) to stamp on each
+module so the IR matches what the JIT will compile for. From here on the
+driver treats `codegen` as a module factory.
 
 ### One module per function, and the prototype registry
 
@@ -317,66 +407,141 @@ takes the same path.
 Since a JIT'd module is frozen, calling `foo` from a *later* module needs a
 fresh `declare double @foo(double)` in that module — the same mechanism C
 uses (a declaration in every translation unit, the linker binds them). The
-`functionProtos` map keeps the latest `PrototypeAST` for every name, and a
-new `getFunction()` helper replaces the plain module lookup everywhere:
+`functionProtos` map keeps the latest prototype for every name, and a new
+`getFunction()` helper replaces the plain module lookup everywhere:
 
 **`Chapter4/src/codegen.cpp`**
 ```cpp
-static llvm::Function *getFunction(std::string Name, IRGenContext &ctx) {
-  // First, see if the function has already been added to the current module.
-  if (auto *F = ctx.theModule->getFunction(Name))
+  llvm::Function *getFunction(const std::string &Name) {
+    // First, see if the function has already been added to the current module.
+    if (auto *F = theModule->getFunction(Name))
+      return F;
+
+    // If not, check whether we can codegen the declaration from some existing prototype.
+    auto FI = functionProtos.find(Name);
+    if (FI != functionProtos.end())
+      return emitDeclaration(FI->second);   // re-declare it into the current module
+
+    // If no existing prototype exists, return null.
+    return nullptr;
+  }
+```
+
+`emit(CallExprAST&)` now calls `getFunction(call.getCallee())` where Chapter
+3 asked the module directly. The re-declaration itself is Chapter 3's
+prototype codegen, renamed `emitDeclaration()` because it now has three
+callers — externs, the head of every definition, and this helper:
+
+**`Chapter4/src/codegen.cpp`**
+```cpp
+  // `extern`: declare it here and remember the prototype for later modules.
+  llvm::Function *emitPrototype(PrototypeAST &proto) {
+    llvm::Function *F = emitDeclaration(proto);
+    functionProtos.insert_or_assign(proto.getName(), proto);
     return F;
-
-  // If not, check whether we can codegen the declaration from some existing prototype.
-  auto FI = ctx.functionProtos.find(Name);
-  if (FI != ctx.functionProtos.end())
-    return FI->second->codegen(ctx);   // re-declare it into the current module
-
-  // If no existing prototype exists, return null.
-  return nullptr;
-}
+  }
 ```
 
-`FunctionAST::codegen()` now *donates* its prototype to the registry before
-generating the body (note the reference kept before the move — the AST no
-longer owns its own prototype after this line):
+and `emitFunction()` resolves the `Function` to fill in, then registers its
+prototype once the body is in:
 
 **`Chapter4/src/codegen.cpp`**
 ```cpp
-  auto &P = *Proto;
-  ctx.functionProtos[Proto->getName()] = std::move(Proto);
-  llvm::Function *TheFunction = getFunction(P.getName(), ctx);
+  llvm::Function *emitFunction(FunctionAST &fn) {
+    const PrototypeAST &Proto = *fn.getProto();
+
+    // Resolve the Function to fill in: reuse a declaration already in this
+    // module (a prior `extern`), otherwise declare it now from this prototype.
+    llvm::Function *TheFunction = theModule->getFunction(Proto.getName());
+    if (!TheFunction)
+      TheFunction = emitDeclaration(Proto);
+    // ... entry block, namedValues, body, ret, verify, FPM -- as in Chapter3, then:
+
+      functionProtos.insert_or_assign(Proto.getName(), Proto);   // register on success
+      return TheFunction;
 ```
 
-and `handleExtern()` registers extern prototypes the same way. A pleasant
-side effect: because lookups now go through the registry (newest prototype
-wins) and each definition lives in its own module, Chapter 3's
-extern-then-def argument-name bug is gone.
+The registration comes *last*, after the body has been built, verified and
+optimized — see [Deviations from upstream](#deviations-from-upstream) for
+why that ordering differs from the tutorial's.
+
+(Upstream's registry *takes* the prototype out of the AST with a
+`std::move`; here it stores a copy — see
+[Deviations from upstream](#deviations-from-upstream).)
+
+Chapter 3's "Function cannot be redefined" guard is gone: with every
+definition in a fresh module, the module lookup can only ever find a
+*declaration* of the name, never a body. (The JIT is what refuses duplicates
+now, as described above.) Chapter 3's extern-then-def argument-name bug
+shrinks but does not vanish: an `extern foo(a);` in an *earlier* module is
+now re-declared from the newest prototype, so a later `def foo(b) b;` in its
+own module codegens against `b` — but an `extern` does not hand its module
+to the JIT, so `extern foo(a); def foo(b) b;` typed back to back still share
+one module, the declaration is reused, and `b` is still unknown, exactly as
+upstream.
+
+### Handing a module to the JIT: `takeModule()`
+
+Upstream's driver does the hand-off inline — build a `ThreadSafeModule`
+from the two globals, `addModule` it, call `InitializeModuleAndPassManager()`
+— and relies on the fact that reassigning each pass-manager global happens
+to destroy the old one *after* the context it referenced has already moved
+away. That works, but the ordering is accidental. Here the hand-off is one
+method with the ordering spelled out:
+
+**`Chapter4/src/codegen.cpp`**
+```cpp
+  llvm::orc::ThreadSafeModule take() {
+    theSI.reset();
+    thePIC.reset();
+    theFPM.reset();
+    theLAM.reset();
+    theFAM.reset();
+    theCGAM.reset();
+    theMAM.reset();
+    builder.reset();
+    namedValues.clear();   // held Value*s into the module that is leaving
+
+    llvm::orc::ThreadSafeModule TSM(std::move(theModule), std::move(theContext));
+    initializeModule();
+    return TSM;
+  }
+```
+
+Everything that holds a reference *into* the context — the instrumentation
+(constructed with `*theContext`), the analysis managers with their cached
+results, the builder with its insert point, the symbol table's `Value*`s —
+is destroyed or cleared first; then the
+module and context move into the `ThreadSafeModule` the JIT will own; then
+`initializeModule()` opens the next module with a fresh pipeline. The caller
+sees a single expression: `theJIT->addModule(codegen.takeModule())`. In
+Chapter 9 the debug-info builder joins the teardown list, which is exactly
+the kind of addition this shape is meant to absorb.
 
 ### Executing a top-level expression
 
-The full REPL "evaluate" path, replacing Chapter 3's `eraseFromParent()`:
+The full REPL "evaluate" path in the driver, replacing Chapter 3's
+`eraseFromParent()`:
 
-**`Chapter4/src/parser.cpp`**
+**`Chapter4/src/driver.cpp`**
 ```cpp
-// Create a ResourceTracker to track JIT'd memory allocated to our
-// anonymous expression -- that way we can free it after executing.
-auto RT = ctx.theJIT->getMainJITDylib().createResourceTracker();
+      // Create a ResourceTracker to track JIT'd memory allocated to our
+      // anonymous expression -- that way we can free it after executing.
+      auto RT = theJIT->getMainJITDylib().createResourceTracker();
 
-auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext));
-ctx.ExitOnErr(ctx.theJIT->addModule(std::move(TSM), RT));
-ctx.InitializeModuleAndPassManager();          // open a fresh module for what's next
+      // Hand the module to the JIT under the tracker; the session opens a fresh one.
+      ExitOnErr(theJIT->addModule(codegen.takeModule(), RT));
 
-// Search the JIT for the __anon_expr symbol.
-auto ExprSymbol = ctx.ExitOnErr(ctx.theJIT->lookup("__anon_expr"));
+      // Search the JIT for the __anon_expr symbol.
+      auto ExprSymbol = ExitOnErr(theJIT->lookup("__anon_expr"));
 
-// Get the symbol's address and cast it to the right type (takes no
-// arguments, returns a double) so we can call it as a native function.
-double (*FP)() = ExprSymbol.getAddress().toPtr<double (*)()>();
-fprintf(stderr, "Evaluated to %f\n", FP());
+      // Get the symbol's address and cast it to the right type (takes no
+      // arguments, returns a double) so we can call it as a native function.
+      double (*FP)() = ExprSymbol.getAddress().toPtr<double (*)()>();
+      fprintf(stderr, "Evaluated to %f\n", FP());
 
-// Delete the anonymous expression module from the JIT.
-ctx.ExitOnErr(RT->remove());
+      // Delete the anonymous expression module from the JIT.
+      ExitOnErr(RT->remove());
 ```
 
 Step by step: the anonymous function's module is handed to the JIT under a
@@ -389,10 +554,242 @@ from one statically linked into the binary, so a raw pointer cast and a
 plain C call are all it takes; and
 `RT->remove()` frees the JIT'd memory, since `__anon_expr` is
 evaluate-once-and-discard. Function *definitions* take the same
-`addModule` + fresh-module path but with no tracker — they must stay resident
-so later expressions can call them.
+`addModule(codegen.takeModule())` path but with no tracker — they must stay
+resident so later expressions can call them:
 
-### Deviation from upstream: `putchard` arrives in Chapter 5
+**`Chapter4/src/driver.cpp`**
+```cpp
+void Driver::handleDefinition() {
+  if (auto FnAST = parser.parseDefinition()) {
+    if (auto *FnIR = codegen.emitFunction(*FnAST)) {
+      fprintf(stderr, "Read function definition:\n");
+      FnIR->print(llvm::errs());
+      fprintf(stderr, "\n");
+
+      // To Support JIT: hand the finished module to the JIT (it stays resident so
+      // later expressions can call the function); the session opens a fresh one.
+      ExitOnErr(theJIT->addModule(codegen.takeModule()));
+    }
+  } else {
+    parser.getNextToken();   // error recovery
+  }
+}
+```
+
+`handleExtern()` is Chapter 3's unchanged: `emitPrototype()` now registers
+the prototype itself, so there is nothing for the driver to do beyond
+printing.
+
+(Upstream ends the chapter with a host-side `putchard` the JIT'd code can
+call; this repo adds it in Chapter5 — see
+[Deviations from upstream](#deviations-from-upstream).)
+
+## File-by-file: What changed from Chapter3
+
+The JIT class comes from the shared repo-level `include/KaleidoscopeJIT.h`.
+The exact split (established with `diff -rq ../Chapter3 .`):
+
+**New files**
+
+| File | Purpose |
+| --- | --- |
+| `test/jit_test.cpp` | Everything that needs a JIT: a fixture that plays the driver's part (JIT + session + `takeModule()` hand-off), a hand-built `add_two`, a cross-module call, a dlsym-resolved `sin`, and two parameterized suites — hand-built binary expressions and the full text → parse → codegen → JIT → `double` pipeline. |
+| `test/filecheck/opt.k` | Replaces Chapter3's `codegen.k`: the printed IR is now *optimized* IR, so the checks assert on what the passes did. |
+| `test/filecheck/jit.k` | The evaluate loop end-to-end: `Evaluated to ...` for constants, cross-module calls, and a dlsym-resolved extern — plus the error-recovery checks that Chapter3's `codegen-error.k` covered. |
+
+**Same filename, byte-identical** — safe to skip when reading:
+`include/ast.h`, `include/lexer.h`, `include/log.h`, `include/parser.h`,
+`src/lexer.cpp`, `src/log.cpp`, `src/parser.cpp`, `src/main.cpp`,
+`test/lexer_test.cpp`, `test/parser_test.cpp`, `test/filecheck/lit.cfg`,
+`build.sh`. The whole frontend — and its tests — is untouched: neither the
+parser nor `main` learned anything about optimization or JITs.
+
+**Same filename, modified** — before → after:
+
+`Chapter4/include/codegen.h` — two methods and two forward declarations:
+
+```cpp
+// Chapter3                              // Chapter4
+namespace llvm {                          namespace llvm {
+class Function;                           class DataLayout;                      // NEW
+class Module;                             class Function;
+}                                         class Module;
+                                          namespace orc { class ThreadSafeModule; }  // NEW
+                                          }
+class CodeGenSession {                    class CodeGenSession {
+  emitPrototype / emitFunction /            emitPrototype / emitFunction / currentModule /
+  currentModule / eraseFunction               eraseFunction
+  currentModule                             llvm::orc::ThreadSafeModule takeModule();     // NEW
+                                            void setDataLayout(const llvm::DataLayout &); // NEW
+```
+
+`Chapter4/src/codegen.cpp` — the `Impl` grows the optimizer members, the
+`functionProtos` registry and the `dataLayout`; the constructor's three
+lines become `initializeModule()`; `take()` and `getFunction()` are new;
+prototype codegen is renamed `emitDeclaration()` with `emitPrototype()`
+becoming the registering wrapper; two lookups reroute through the registry;
+the redefinition guard goes; and the FPM runs on every finished function:
+
+```cpp
+// Chapter3                                   // Chapter4
+llvm::Function *CalleeF =                      llvm::Function *CalleeF =
+    theModule->getFunction(call.getCallee());      getFunction(call.getCallee());
+
+llvm::Function *TheFunction =                  functionProtos.insert_or_assign(Proto.getName(), Proto);
+    theModule->getFunction(Proto.getName());   llvm::Function *TheFunction =
+if (!TheFunction)                                  getFunction(Proto.getName());
+  TheFunction = emitPrototype(Proto);
+if (!TheFunction->empty())                     // (guard removed: one definition per module)
+  return logErrorV("Function cannot be redefined.");
+
+llvm::verifyFunction(*TheFunction);            llvm::verifyFunction(*TheFunction);
+                                               theFPM->run(*TheFunction, *theFAM);
+```
+
+`Chapter4/include/driver.h` + `src/driver.cpp` — the driver gains the JIT
+and a real constructor; `handleDefinition` and `handleTopLevelExpression`
+gain their JIT duties (`handleExtern` and `mainLoop` are Chapter3's, except
+that `mainLoop` prints one extra `ready> ` before bootstrapping the first
+token, so the prompt appears before the REPL blocks on initial input):
+
+```cpp
+// Chapter3                            // Chapter4
+Driver() : parser(lexer) {}             Driver();   // InitializeNativeTarget*, Create() JIT, setDataLayout
+Lexer lexer;                            Lexer lexer;
+Parser parser;                          Parser parser;
+CodeGenSession codegen;                 CodeGenSession codegen;
+                                        llvm::ExitOnError ExitOnErr;                          // NEW
+                                        std::unique_ptr<llvm::orc::KaleidoscopeJIT> theJIT;   // NEW
+
+handleDefinition:                       handleDefinition:
+  emitFunction + print                    emitFunction + print
+                                          theJIT->addModule(codegen.takeModule())   // stays resident
+handleTopLevelExpression:               handleTopLevelExpression:
+  emitFunction + print                    emitFunction + print
+  FnIR->eraseFromParent()                 addModule(codegen.takeModule(), RT),
+                                          lookup("__anon_expr"), call it,
+                                          print "Evaluated to %f", RT->remove()
+```
+
+`Chapter4/test/codegen_test.cpp` — Chapter3's IR-shape tests carry over
+unchanged (they now see optimized IR, which changes nothing they assert).
+`FunctionRedefinition` is replaced by the cross-module cases this chapter is
+about (plus `FailedBodyIsNotRegistered`): `takeModule()` yields the old module and opens an empty one, a call
+into an earlier module gets a fresh declaration, an `extern` survives the
+hand-off, a re-`def` in a fresh module is accepted, the newest prototype
+wins the argument names, and GVN leaves one `fmul` in `x*y + x*y`.
+
+`Chapter4/CMakeLists.txt` — links two more LLVM components
+(`llvm_map_components_to_libnames(llvm_libs core orcjit native)`: the ORC
+JIT library and the host-target backend the three `InitializeNativeTarget*`
+calls rely on) and registers the `jit_test` executable.
+
+`Chapter4/cmd.txt` — new demo input: the chapter's optimization showcase
+plus JIT-evaluated calls and libm externs.
+
+## Deviations from upstream
+
+Chapter2–9 keep the tutorial's behavior, quirks included. This chapter
+departs from it in three places, collected here so the main narrative above
+can follow the tutorial's order. None of them changes what the REPL prints.
+
+### The prototype registry stores copies, and only of functions that exist
+
+Upstream's registry is `std::map<std::string, std::unique_ptr<PrototypeAST>>`
+and `FunctionAST::codegen()` *donates* its prototype to it **before**
+generating the body — with a reference kept before the move, because the AST
+no longer owns its own prototype after that line:
+
+```cpp
+// upstream (LangImpl04)
+Function *FunctionAST::codegen() {
+  // Transfer ownership of the prototype to the FunctionProtos map, but keep a
+  // reference to it for use below.
+  auto &P = *Proto;
+  FunctionProtos[Proto->getName()] = std::move(Proto);
+  Function *TheFunction = getFunction(P.getName());
+```
+
+and `HandleExtern()` does the same with `std::move(ProtoAST)` after
+codegen. Here the registry is `std::map<std::string, PrototypeAST>` — it
+stores **copies**:
+
+**`Chapter4/src/codegen.cpp`**
+```cpp
+    functionProtos.insert_or_assign(Proto.getName(), Proto);   // copy, newest wins
+```
+
+— and it does so **after** the body succeeded, as the last step before
+returning.
+
+Why copies: `emitFunction(FunctionAST&)` takes the AST by reference, and a
+code generator that quietly hollows out the tree it was handed is a trap
+for every other consumer (the driver still holds the `FunctionAST`; the
+tests inspect it afterwards). A prototype is just a name and a vector of
+argument names, so copying is cheap, and `insert_or_assign` gives the
+"newest wins" semantics upstream got from `operator[]` assignment without
+needing a default constructor on `PrototypeAST`.
+
+Why register last: upstream registers first because its `getFunction()` is
+also how the head of a definition finds or creates its own `Function`. The
+price is that a definition whose *body* fails stays registered — and the
+next call to it re-declares the name into a fresh module, hands that module
+to the JIT, and dies at `lookup` with `Symbols not found`, taking the REPL
+with it. Here the head of a definition resolves its `Function` directly
+(module lookup, else `emitDeclaration`), so nothing needs the registry until
+the function actually exists; a failed body leaves no trace, and a later
+call is an ordinary `Error: Unknown function referenced` — `jit.k` checks
+exactly that. For successful definitions the two orders are
+indistinguishable.
+
+| | upstream (`unique_ptr`, moved, registered first) | here (by value, copied, registered last) |
+| --- | --- | --- |
+| after `emitFunction`, `fn.getProto()` | dangling — `Proto` is null | still valid |
+| registry entry for a re-`def`ined name | replaced | replaced |
+| `extern` registration | in `HandleExtern` after codegen | inside `emitPrototype` |
+| `def bad(x) y;` then `bad(1.0);` | JIT error, REPL exits | `Error: Unknown function referenced`, REPL continues |
+| lifetime of the registered prototype | as long as the registry | as long as the registry |
+
+### The data layout is set from outside, not read from a JIT
+
+Upstream's `InitializeModuleAndPassManager()` reaches into the JIT global for
+the layout every module must carry:
+
+```cpp
+// upstream (LangImpl04)
+static void InitializeModuleAndPassManager() {
+  // Open a new context and module.
+  TheContext = std::make_unique<LLVMContext>();
+  TheModule = std::make_unique<Module>("KaleidoscopeJIT", *TheContext);
+  TheModule->setDataLayout(TheJIT->getDataLayout());
+  ...
+```
+
+Here the `Impl` has no JIT to ask. The driver passes the layout in once,
+through `setDataLayout()`, and `initializeModule()` applies it to every
+module it opens — if it has been given one:
+
+**`Chapter4/src/codegen.cpp`**
+```cpp
+    // set the data layout of the module to match the target machine's data layout.
+    if (dataLayout)
+      theModule->setDataLayout(*dataLayout);
+```
+
+Why: the code generator should not know a JIT exists (Chapter 8 will drive
+the same session with a `TargetMachine` instead), and the unit tests build a
+`CodeGenSession` with no JIT at all — their modules simply keep the default
+layout, which is fine for checking IR shape. In the REPL the driver always
+calls `setDataLayout()` before the first `emit*()`, so every module the JIT
+receives carries the JIT's layout exactly as upstream's do.
+
+|                                  | upstream                              | refactored                                   |
+| -------------------------------- | ------------------------------------- | -------------------------------------------- |
+| where the layout comes from      | `TheJIT->getDataLayout()` in codegen   | `Driver` → `setDataLayout()` once            |
+| module opened before any JIT     | impossible (JIT created first)         | default layout (unit tests only)             |
+| modules the JIT sees             | JIT's layout                           | JIT's layout                                 |
+
+### `putchard` arrives in Chapter 5, not here
 
 Upstream closes the chapter by extending the language from the *host* side:
 since unresolved symbols fall back to dlsym on the running process, any
@@ -424,101 +821,6 @@ get there: on Windows the explicit `DLLEXPORT` is required because the
 dynamic loader finds symbols via `GetProcAddress`, and on Linux the host
 binary must be linked with `-rdynamic` so its symbols stay visible to dlsym
 (macOS executables export them by default).
-
-## File-by-file: What changed from Chapter3
-
-No new source files — the JIT class comes from the shared repo-level
-`include/KaleidoscopeJIT.h`. The exact split:
-
-**New files**
-
-| File | Purpose |
-| --- | --- |
-| `test/filecheck/opt.k` | Replaces Chapter3's `codegen.k`: the printed IR is now *optimized* IR, so the checks assert on what the passes did. |
-| `test/filecheck/jit.k` | The evaluate loop end-to-end: `Evaluated to ...` for constants, cross-module calls, and a dlsym-resolved extern — plus the error-recovery checks that Chapter3's `codegen-error.k` covered. |
-
-**Same filename, byte-identical** — safe to skip when reading:
-`include/ast.h`, `include/parser.h`, `include/lexer.h`, `include/log.h`,
-`src/lexer.cpp`, `src/log.cpp`, `src/main.cpp` (all Chapter 4 state hides
-inside `IRGenContext`, so even `main` is unchanged), `test/lexer_test.cpp`,
-`test/filecheck/lit.cfg`, `build.sh`.
-
-**Same filename, modified** — before → after:
-
-`Chapter4/include/ir_gen_ctx.h` — the big one. `IRGenContext` grows the
-optimizer members (`theFPM` + four analysis managers + instrumentation), the
-JIT members (`theJIT`, `ExitOnErr`), the `functionProtos` registry, and the
-`InitializeModuleAndPassManager()` method; the constructor now initializes
-the native target and creates the JIT:
-
-```cpp
-// Chapter3: 4 members,                // Chapter4: + optimizer, JIT, registry
-// ctor opens one module forever        // ctor opens the FIRST of many modules
-theContext / theModule /                theContext / theModule / builder / namedValues
-builder / namedValues                   theFPM, theLAM, theFAM, theCGAM, theMAM, thePIC, theSI
-                                        theJIT, ExitOnErr
-                                        functionProtos
-                                        InitializeModuleAndPassManager()
-```
-
-`Chapter4/src/codegen.cpp` — adds the `getFunction()` helper; two lookups
-reroute through it, and the FPM runs on every finished function:
-
-```cpp
-// Chapter3                                   // Chapter4
-llvm::Function *CalleeF =                      llvm::Function *CalleeF =
-    ctx.theModule->getFunction(Callee);            getFunction(Callee, ctx);
-
-llvm::Function *TheFunction =                  auto &P = *Proto;
-    ctx.theModule->getFunction(                ctx.functionProtos[P.getName()] = std::move(Proto);
-        Proto->getName());                     llvm::Function *TheFunction =
-if (!TheFunction)                                  getFunction(P.getName(), ctx);
-  TheFunction = Proto->codegen(ctx);
-
-llvm::verifyFunction(*TheFunction);            llvm::verifyFunction(*TheFunction);
-                                               ctx.theFPM->run(*TheFunction, *ctx.theFAM);
-```
-
-`Chapter4/src/parser.cpp` — the three `handle*` wrappers gain their JIT
-duties (all `parse*` methods untouched):
-
-```cpp
-// Chapter3                            // Chapter4
-handleDefinition:                       handleDefinition:
-  codegen + print                         codegen + print
-                                          theJIT->addModule(module)   // stays resident
-                                          InitializeModuleAndPassManager()
-handleExtern:                           handleExtern:
-  codegen + print                         codegen + print
-                                          functionProtos[name] = std::move(ProtoAST)
-handleTopLevelExpression:               handleTopLevelExpression:
-  codegen + print                         codegen + print
-  FnIR->eraseFromParent()                 addModule under ResourceTracker,
-                                          lookup("__anon_expr"), call it,
-                                          print "Evaluated to %f", RT->remove()
-```
-
-(`mainLoop()` also prints one extra `ready> ` before bootstrapping the first
-token, so the prompt appears before the REPL blocks on initial input.)
-
-`Chapter4/test/codegen_test.cpp` — adds a `JIT` test (build `add_two` by
-hand, `addModule`, `lookup`, call `FP(5.5)`, expect `7.5`). The Chapter3
-substring checks for *what instructions look like* stay, but a comment notes
-that optimization-shape assertions moved to `opt.k`, where FileCheck
-expresses instruction counts and def-use structure directly.
-
-`Chapter4/test/parser_test.cpp` — adds `JITExecutionParamTest`: a
-parameterized suite running the **full pipeline** (parse → codegen → JIT →
-execute) per expression and comparing the numeric result
-(`EXPECT_DOUBLE_EQ`), e.g. `"2.0 + 3.0 * 4.0"` → `14.0`.
-
-`Chapter4/CMakeLists.txt` — links two more LLVM components:
-`llvm_map_components_to_libnames(llvm_libs core orcjit native)` (the ORC JIT
-library and the host-target backend the three `InitializeNativeTarget*`
-calls rely on).
-
-`Chapter4/cmd.txt` — new demo input: the chapter's optimization showcase
-plus JIT-evaluated calls and libm externs.
 
 ## Build and run
 
@@ -611,14 +913,24 @@ the [top-level README](../README.md#build-and-run).)
 Same two-scheme setup — see the [top-level
 README](../README.md#testing-the-two-schemes) for the rationale and lit
 mechanics. What Chapter 4 changes is *which layer checks what*, exactly along the
-"observable through the tool ↔ needs the API" line:
+"observable through the tool ↔ needs the API" line — and, new this chapter,
+a third gtest binary so that each test file matches one component:
 
-- **Numeric results moved into gtest.** Executing JIT'd code yields a typed
-  `double` in-process — perfect for `EXPECT_DOUBLE_EQ`, awkward for textual
-  matching. `parser_test.cpp`'s `JITExecutionParamTest` runs
-  parse → codegen → JIT → call for a table of expressions;
-  `codegen_test.cpp`'s `JIT` test does the same for a hand-built function
-  with a real argument.
+- **Numeric results live in gtest, in `jit_test.cpp`.** Executing JIT'd
+  code yields a typed `double` in-process — perfect for `EXPECT_DOUBLE_EQ`,
+  awkward for textual matching. The fixture does what `Driver` does (create
+  the JIT, `setDataLayout`, `takeModule()` into `addModule`), and the tests
+  are pure consumers of the facade: a hand-built `add_two` called with a
+  real argument, a call across two modules, `sin(0.0)` resolved by dlsym,
+  a table of hand-built binary expressions, and a table of *source strings*
+  run through the full pipeline (`"2.0 + 3.0 * 4.0"` → `14.0`). That last
+  suite is the one place a test touches the parser and the code generator
+  together — which is why it is here and not in `parser_test.cpp`, which
+  stays byte-identical to Chapter3's (and Chapter2's).
+- **Cross-module codegen behavior lives in `codegen_test.cpp`**, with no
+  JIT involved: `takeModule()` opens an empty module, a call into an earlier
+  module re-declares through the registry, externs survive the hand-off, a
+  re-`def` is accepted at the codegen level, and the newest prototype wins.
 - **IR shape moved into FileCheck.** `opt.k` asserts on the *optimized* IR
   the driver prints: GVN merging `x*y + x*y` into a single `fmul`
   (`CHECK: fmul` ... `CHECK-NEXT: fadd` of the same capture), commuted adds
@@ -636,7 +948,8 @@ mechanics. What Chapter 4 changes is *which layer checks what*, exactly along th
 
 ```sh
 ctest --test-dir build             # everything
-./build/parser_test                # includes the JIT execution table
+./build/jit_test                   # JIT execution, incl. the full-pipeline table
+./build/codegen_test               # IR shape + cross-module codegen
 lit -v test/filecheck/opt.k        # the optimized-IR checks
 lit -v test/filecheck/jit.k        # the evaluate-loop checks
 ```

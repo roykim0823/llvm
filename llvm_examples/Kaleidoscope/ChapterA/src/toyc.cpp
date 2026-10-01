@@ -4,19 +4,27 @@
 // with the pipeline stage selected by -emit. The enum ordering is
 // load-bearing: "emit stage N" means "run everything up to N".
 //
-//   toyc file.k -emit=ast        dump the AST and stop
+//   toyc file.k -emit=ast        dump the AST and stop (parse only, no sema)
 //   toyc file.k -emit=ir [-opt]  print LLVM IR (optionally optimized)
 //   toyc file.k -emit=obj -o f.o compile to an object file
 //   toyc file.k -emit=jit        execute top-level expressions
 //
 // The input defaults to stdin ("-"), so `toyc < file.k -emit=ir` also works.
 //
+// Changes from ChapterA: one DiagnosticEngine is threaded through every
+// stage; the parser recovers and reports all parse errors; sema runs as its
+// own gate between parsing and the backend, reports all semantic errors,
+// and produces the name Resolutions the backend consumes; any failing stage
+// ends with a clang-style "N errors generated." summary.
+//
 //===----------------------------------------------------------------------===//
 
 #include "toy/AST.h"
 #include "toy/CodeGen.h"
+#include "toy/Diagnostics.h"
 #include "toy/Lexer.h"
 #include "toy/Parser.h"
+#include "toy/Sema.h"
 
 #include "../../include/KaleidoscopeJIT.h"
 
@@ -61,11 +69,21 @@ static cl::opt<std::string> outputFilename("o", cl::desc("Output object file"),
                                            cl::init("output.o"),
                                            cl::value_desc("filename"));
 
+/// Print the clang-style failure summary and return the failing exit code:
+/// callers `return reportErrors(diags);`.
+static int reportErrors(const DiagnosticEngine &diags) {
+  unsigned n = diags.errorCount();
+  llvm::errs() << n << (n == 1 ? " error" : " errors") << " generated.\n";
+  return 1;
+}
+
 /// Read the input file (or stdin) and parse it into a ModuleAST.
 /// The MemoryBuffer must outlive the lexer, which must outlive the parser --
 /// all handled by declaration order in this frame; the returned AST is
-/// self-contained.
-static std::unique_ptr<ModuleAST> parseInputFile(llvm::StringRef filename) {
+/// self-contained. Returns null only if the input cannot be read; parse
+/// errors are reported through `diags` and yield a partial module.
+static std::unique_ptr<ModuleAST> parseInputFile(llvm::StringRef filename,
+                                                 DiagnosticEngine &diags) {
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
       llvm::MemoryBuffer::getFileOrSTDIN(filename);
   if (std::error_code ec = fileOrErr.getError()) {
@@ -74,12 +92,12 @@ static std::unique_ptr<ModuleAST> parseInputFile(llvm::StringRef filename) {
   }
   auto buffer = fileOrErr.get()->getBuffer();
   LexerBuffer lexer(buffer.begin(), buffer.end(), std::string(filename));
-  Parser parser(lexer);
+  Parser parser(lexer, diags);
   return parser.parseModule();
 }
 
-/// Generate all records into one module and hand back the session,
-/// finalized and verified. Returns false on any codegen error.
+/// Generate all records into one module and finalize (debug info +
+/// verifier). Returns false on any codegen error.
 static bool emitWholeModule(CodeGenSession &session, ModuleAST &moduleAST) {
   for (auto &record : moduleAST)
     if (!session.emitRecord(*record))
@@ -87,16 +105,18 @@ static bool emitWholeModule(CodeGenSession &session, ModuleAST &moduleAST) {
   return session.finalize();
 }
 
-static int dumpLLVMIR(ModuleAST &moduleAST) {
-  CodeGenSession session(
-      {enableOpt, emitDebugInfo, std::string(inputFilename)});
+static int dumpLLVMIR(ModuleAST &moduleAST, const Resolutions &resolutions,
+                      DiagnosticEngine &diags) {
+  CodeGenSession session({enableOpt, emitDebugInfo, std::string(inputFilename)},
+                         resolutions, diags);
   if (!emitWholeModule(session, moduleAST))
-    return 1;
+    return reportErrors(diags);
   session.currentModule().print(llvm::outs(), nullptr);
   return 0;
 }
 
-static int emitObjectFile(ModuleAST &moduleAST) {
+static int emitObjectFile(ModuleAST &moduleAST, const Resolutions &resolutions,
+                          DiagnosticEngine &diags) {
   auto targetTriple = llvm::sys::getDefaultTargetTriple();
 
   std::string error;
@@ -112,11 +132,11 @@ static int emitObjectFile(ModuleAST &moduleAST) {
       target->createTargetMachine(targetTriple, /*CPU=*/"generic",
                                   /*Features=*/"", opt, llvm::Reloc::PIC_));
 
-  CodeGenSession session(
-      {enableOpt, emitDebugInfo, std::string(inputFilename)});
+  CodeGenSession session({enableOpt, emitDebugInfo, std::string(inputFilename)},
+                         resolutions, diags);
   session.setDataLayout(targetMachine->createDataLayout());
   if (!emitWholeModule(session, moduleAST))
-    return 1;
+    return reportErrors(diags);
 
   llvm::Module &module = session.currentModule();
   module.setTargetTriple(targetTriple);
@@ -145,7 +165,8 @@ static int emitObjectFile(ModuleAST &moduleAST) {
 /// top-level expressions each get their own module (so they can be replaced
 /// and freed independently); top-level expressions are executed immediately
 /// and print their value.
-static int runJit(ModuleAST &moduleAST) {
+static int runJit(ModuleAST &moduleAST, const Resolutions &resolutions,
+                  DiagnosticEngine &diags) {
   auto jitOrErr = llvm::orc::KaleidoscopeJIT::Create();
   if (!jitOrErr) {
     llvm::errs() << "Failed to create JIT: "
@@ -158,7 +179,8 @@ static int runJit(ModuleAST &moduleAST) {
     llvm::errs() << "warning: -g is ignored with -emit=jit\n";
 
   CodeGenSession session(
-      {enableOpt, /*emitDebugInfo=*/false, std::string(inputFilename)});
+      {enableOpt, /*emitDebugInfo=*/false, std::string(inputFilename)},
+      resolutions, diags);
   session.setDataLayout(jit->getDataLayout());
 
   auto reportErr = [](llvm::Error err) {
@@ -169,7 +191,7 @@ static int runJit(ModuleAST &moduleAST) {
   for (auto &record : moduleAST) {
     llvm::Function *ir = session.emitRecord(*record);
     if (!ir)
-      return 1;
+      return reportErrors(diags);
 
     // Externs only register a prototype; nothing to add to the JIT.
     auto *func = llvm::dyn_cast<FunctionAST>(record.get());
@@ -205,14 +227,27 @@ static int runJit(ModuleAST &moduleAST) {
 int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, "kaleidoscope compiler\n");
 
-  auto moduleAST = parseInputFile(inputFilename);
+  DiagnosticEngine diags;
+
+  auto moduleAST = parseInputFile(inputFilename, diags);
   if (!moduleAST)
     return 1;
+  if (diags.hadError())
+    return reportErrors(diags);
 
+  // The AST dump shows the parse tree, so it runs before sema (undeclared
+  // names dump fine) -- the frontend still stops here with no LLVM target
+  // machinery touched.
   if (emitAction == Action::DumpAST) {
     dump(*moduleAST);
     return 0;
   }
+
+  // Semantic analysis gates every backend stage (all errors in one run)
+  // and produces the name resolution the backend consumes.
+  Resolutions resolutions = resolveModule(*moduleAST, diags);
+  if (diags.hadError())
+    return reportErrors(diags);
 
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
@@ -220,11 +255,11 @@ int main(int argc, char **argv) {
 
   switch (emitAction) {
   case Action::DumpIR:
-    return dumpLLVMIR(*moduleAST);
+    return dumpLLVMIR(*moduleAST, resolutions, diags);
   case Action::EmitObj:
-    return emitObjectFile(*moduleAST);
+    return emitObjectFile(*moduleAST, resolutions, diags);
   case Action::RunJIT:
-    return runJit(*moduleAST);
+    return runJit(*moduleAST, resolutions, diags);
   default:
     llvm::errs() << "No action specified (parsing only?), use -emit=<action>\n";
     return 1;

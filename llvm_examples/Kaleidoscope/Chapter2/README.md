@@ -83,7 +83,8 @@ arguments use commas (`foo(a, b)`).
 
 The code realizes the pipeline above as three classes. `main.cpp` constructs
 one `Driver`; the driver owns one `Lexer` and one `Parser` (which holds a
-`Lexer&`) and runs the read-eval-print loop that feeds one to the other:
+`Lexer&`) and runs the read-eval-print loop — the **REPL** — that feeds one
+to the other:
 
 ```
                 source text (stdin)
@@ -1381,11 +1382,11 @@ prompt.
 ## Build and run
 
 Requirements and the other generic build facts (LLVM via Homebrew, CMake ≥
-3.20 with Ninja, the deployment-target pin) are in the top-level README's
-[Build and run](../README.md#build-and-run). Chapter-specific: **no LLVM is
-linked at all** — like upstream's Chapter 2 `toy.cpp`, this directory is a
-pure C++ frontend, so its CMake file also skips the LLVM lookup and the
-deployment-target pin (LLVM first appears in Chapter3 with codegen; the lit
+3.20 with Ninja, the deployment-target and SDK pins) are in the top-level
+README's [Build and run](../README.md#build-and-run). Chapter-specific:
+**no LLVM is linked at all** — like upstream's Chapter 2 `toy.cpp`, this
+directory is a pure C++ frontend, so its CMake file also skips the LLVM
+lookup and those pins (LLVM first appears in Chapter3 with codegen; the lit
 tests still find FileCheck through `llvm-config`, but that is test tooling,
 not a build dependency).
 

@@ -1,5 +1,3 @@
-#include <cstdio>
-
 #include "parser.h"
 #include "log.h"
 
@@ -12,8 +10,8 @@ int Parser::getNextToken() {
 
 int Parser::getTokPrecedence() {
     if (!isascii(curTok)) return -1;
-    auto it = ctx.binopPrecedence.find(static_cast<char>(curTok));
-    if (it == ctx.binopPrecedence.end()) return -1;
+    auto it = binopPrecedence.find(static_cast<char>(curTok));
+    if (it == binopPrecedence.end()) return -1;
     return it->second;
 }
 
@@ -336,9 +334,32 @@ std::unique_ptr<FunctionAST> Parser::parseDefinition() {
     auto proto = parsePrototype();
     if (!proto) return nullptr;
 
-    if (auto e = parseExpression())
-        return std::make_unique<FunctionAST>(std::move(proto), std::move(e));
-    return nullptr;
+    // A user-defined binary operator becomes part of the grammar as soon as its
+    // prototype is parsed -- before the body, which may use it recursively, and
+    // before any subsequent input. (Upstream installs it in FunctionAST::codegen.)
+    bool installedOp = false;
+    int previousPrec = -1;  // -1: the operator was not in the table before
+    if (proto->isBinaryOp()) {
+        char op = proto->getOperatorName();
+        auto it = binopPrecedence.find(op);
+        if (it != binopPrecedence.end()) previousPrec = it->second;
+        binopPrecedence[op] = proto->getBinaryPrecedence();
+        installedOp = true;
+    }
+
+    auto e = parseExpression();
+    if (!e) {
+        // The operator was never really (re)defined: put the table back the way
+        // it was, so later input does not parse against a function that will
+        // not exist -- or against a precedence that never took effect.
+        if (installedOp) {
+            char op = proto->getOperatorName();
+            if (previousPrec < 0) binopPrecedence.erase(op);
+            else binopPrecedence[op] = previousPrec;
+        }
+        return nullptr;
+    }
+    return std::make_unique<FunctionAST>(std::move(proto), std::move(e));
 }
 
 // top-level expression ::= expression
@@ -354,93 +375,4 @@ std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr() {
 std::unique_ptr<PrototypeAST> Parser::parseExtern() {
     getNextToken(); // eat extern
     return parsePrototype();
-}
-
-void Parser::handleDefinition() {
-  if (auto FnAST = parseDefinition()) {
-    if (auto *FnIR = FnAST->codegen(ctx)) {
-      fprintf(stderr, "Read function definition:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-
-    // To Support JIT
-      ctx.ExitOnErr(ctx.theJIT->addModule(
-          llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext))));
-      ctx.InitializeModuleAndPassManager();
-      // --- END JIT support
-    }
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::handleExtern() {
-  if (auto ProtoAST = parseExtern()) {
-    if (auto *FnIR = ProtoAST->codegen(ctx)) {
-      fprintf(stderr, "Read extern:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-      ctx.functionProtos[ProtoAST->getName()] = std::move(ProtoAST);  // To Support JIT
-    }
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::handleTopLevelExpression() {
-  // Evaluate a top-level expression into an anonymous function.
-  if (auto FnAST = parseTopLevelExpr()) {
-    if (auto *FnIR = FnAST->codegen(ctx)) {
-      fprintf(stderr, "Read top-level expression:\n");
-      FnIR->print(llvm::errs());
-      fprintf(stderr, "\n");
-
-      // Remove the anonymous expression.  // No need with the below JIT
-      // FnIR->eraseFromParent();
-
-      // JIT implementation
-      //---------------------------------------------------------------------
-      // Create a ResourceTracker to track JIT'd memory allocated to our
-      // anonymous expression -- that way we can free it after executing.
-      auto RT = ctx.theJIT->getMainJITDylib().createResourceTracker();
-
-      auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx.theModule), std::move(ctx.theContext));
-      ctx.ExitOnErr(ctx.theJIT->addModule(std::move(TSM), RT));
-      ctx.InitializeModuleAndPassManager();
-
-      // Search the JIT for the __anon_expr symbol.
-      auto ExprSymbol = ctx.ExitOnErr(ctx.theJIT->lookup("__anon_expr"));
-
-      // Get the symbol's address and cast it to the right type (takes no
-      // arguments, returns a double) so we can call it as a native function.
-      double (*FP)() = ExprSymbol.getAddress().toPtr<double (*)()>();
-      fprintf(stderr, "Evaluated to %f\n", FP());
-
-      // Delete the anonymous expression module from the JIT.
-      ctx.ExitOnErr(RT->remove());
-      //---------------------------------------------------------------------
-    }
-  } else {
-    // Skip token for error recovery.
-    getNextToken();
-  }
-}
-
-void Parser::mainLoop() {
-    fprintf(stderr, "ready> ");
-    getNextToken(); // Bootstrap the first token
-    while (true) {
-        fprintf(stderr, "ready> ");
-        switch (curTok) {
-        case tok_eof: return;
-        case ';':     getNextToken(); break;  // ignore top-level semicolons.
-        case tok_def: handleDefinition(); break;
-        case tok_extern: handleExtern(); break;
-        default:      handleTopLevelExpression(); break;
-        }
-    }
-    // NOTE: unreachable module dump removed -- the loop above only exits via
-    // 'return' on tok_eof, so code after it never ran.
 }

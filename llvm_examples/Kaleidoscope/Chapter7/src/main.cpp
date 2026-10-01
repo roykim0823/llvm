@@ -1,14 +1,10 @@
-#include "lexer.h"
-#include "parser.h"
-#include "ir_gen_ctx.h"
+#include "driver.h"
 
 int main() {
-    toy::Lexer lexer;
-    toy::IRGenContext ctx;
-    toy::Parser parser(lexer, ctx);
+    toy::Driver driver;
 
     // Run the main "interpreter loop" now.
-    parser.mainLoop();
+    driver.mainLoop();
 
     return 0;
 }

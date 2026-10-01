@@ -6,20 +6,31 @@
 #include "log.h"
 
 using namespace toy;
-
-namespace toy { SourceLocation CurLoc; }  // Temp Global variable (declared in debug.h)
-
 /// gettok - Return the next token from standard input.
+// Chapter 9: every character comes through here so the lexer always knows
+// the line and column of what it is looking at.
+int Lexer::advance() {
+    int LastChar = getchar();
+
+    if (LastChar == '\n' || LastChar == '\r') {
+        lexLoc.Line++;
+        lexLoc.Col = 0;
+    } else
+        lexLoc.Col++;
+
+    return LastChar;
+}
+
 int Lexer::gettok() {
 
     while (isspace(lastChar))  // Skip any whitespace
-        lastChar = dbgMgr.advance();
+        lastChar = advance();
 
-    CurLoc = dbgMgr.lexLoc;
+    curLoc = lexLoc;  // Chapter 9: this token starts here
 
     if (isalpha(lastChar)) {  // identifier: [a-zA-Z][a-zA-Z0-9]*
         identifierStr = lastChar;
-        while (isalnum((lastChar = dbgMgr.advance())))
+        while (isalnum((lastChar = advance())))
             identifierStr += lastChar;
 
         if (identifierStr == "def") return tok_def;
@@ -39,7 +50,7 @@ int Lexer::gettok() {
         std::string numStr;
         if (lastChar == '.') {
             // If we see a dot, it must be followed by a digit to be a valid number.
-            int nextChar = dbgMgr.advance();
+            int nextChar = advance();
             if (!isdigit(nextChar)) {
                 // Not a valid number, return the dot as a token.
                 lastChar = nextChar; // Update lastChar to the next character for future calls.
@@ -51,7 +62,7 @@ int Lexer::gettok() {
 
         do {
             numStr += lastChar;
-            lastChar = dbgMgr.advance();
+            lastChar = advance();
         } while (isdigit(lastChar) || lastChar == '.');
 
         numVal = strtod(numStr.c_str(), nullptr);
@@ -60,7 +71,7 @@ int Lexer::gettok() {
 
     if (lastChar == '#') {
         // Comment until end of line.
-        do lastChar = dbgMgr.advance();
+        do lastChar = advance();
         while (lastChar != EOF && lastChar != '\n' && lastChar != '\r');
 
         if (lastChar != EOF) return gettok();
@@ -71,6 +82,6 @@ int Lexer::gettok() {
 
     // Otherwise, just return the character as its ascii value.
     int thisChar = lastChar;
-    lastChar = dbgMgr.advance();
+    lastChar = advance();
     return thisChar;
 }

@@ -1,9 +1,19 @@
 //===- Parser.h - Kaleidoscope Language Parser ----------------------------===//
 //
-// Recursive descent parser in the style of the MLIR Toy tutorial, header-only.
-// It produces a well-formed AST from a stream of Tokens supplied by the
-// Lexer. No semantic checks or symbol resolution are performed here (an
-// undeclared variable parses successfully); those happen in codegen.
+// Recursive descent parser in the style of the MLIR Toy tutorial,
+// header-only. It produces a well-formed AST from a stream of Tokens
+// supplied by the Lexer. No semantic checks or symbol resolution are
+// performed here (an undeclared variable parses successfully); those happen
+// in Sema (see Sema.h).
+//
+// Changes from ChapterA:
+//  - errors are reported through a DiagnosticEngine instead of being
+//    printed directly to llvm::errs(), and
+//  - parseModule() performs panic-mode error recovery: after a bad record
+//    it resynchronizes at the next record boundary (';', 'def', 'extern')
+//    and keeps parsing, so one run reports every parse error in the file.
+//    parseModule() therefore always returns a module (possibly partial);
+//    callers must consult the DiagnosticEngine for success.
 //
 // The one grammar-affecting piece of state the parser owns is the binary
 // operator precedence table: a 'def binary| 5 (a b) ...' registers '|' at
@@ -17,10 +27,10 @@
 #define TOY_PARSER_H
 
 #include "toy/AST.h"
+#include "toy/Diagnostics.h"
 #include "toy/Lexer.h"
 
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <map>
 #include <memory>
@@ -34,8 +44,8 @@ namespace toy {
 /// produces a well formed AST from a stream of Token supplied by the Lexer.
 class Parser {
 public:
-  /// Create a Parser for the supplied lexer.
-  Parser(Lexer &lexer) : lexer(lexer) {
+  /// Create a Parser for the supplied lexer, reporting through `diags`.
+  Parser(Lexer &lexer, DiagnosticEngine &diags) : lexer(lexer), diags(diags) {
     // Install the builtin binary operators (1 is lowest precedence).
     binopPrecedence['='] = 2;
     binopPrecedence['<'] = 10;
@@ -46,7 +56,8 @@ public:
 
   /// Parse a full module: a list of function definitions, extern
   /// declarations, and top-level expressions (wrapped into anonymous
-  /// functions), in source order.
+  /// functions), in source order. Always returns a module; when errors were
+  /// reported the module contains only the records that parsed cleanly.
   std::unique_ptr<ModuleAST> parseModule() {
     lexer.getNextToken(); // prime the lexer
 
@@ -69,14 +80,19 @@ public:
         record = parseTopLevelExpr();
         break;
       }
-      if (!record)
-        return nullptr;
+      if (!record) {
+        // The error was already reported; resynchronize and keep going so
+        // the rest of the file is still checked.
+        recoverToNextRecord();
+        continue;
+      }
       records.push_back(std::move(record));
     }
   }
 
 private:
   Lexer &lexer;
+  DiagnosticEngine &diags;
 
   /// The precedence for each binary operator that is defined. Owned by the
   /// parser: user-defined operators are registered here at parse time.
@@ -85,6 +101,27 @@ private:
   /// Counter used to give each anonymous top-level expression a unique
   /// function name within the module.
   int anonCount = 0;
+
+  /// Panic-mode error recovery: skip tokens until a plausible start of the
+  /// next record. 'def' and 'extern' are safe stopping points without
+  /// consuming them (parseDefinition/parseExtern always consume the keyword,
+  /// so the loop in parseModule makes progress); a ';' is consumed since it
+  /// *ends* the bad record.
+  void recoverToNextRecord() {
+    while (true) {
+      switch (lexer.getCurToken()) {
+      case tok_eof:
+      case tok_def:
+      case tok_extern:
+        return;
+      case tok_semicolon:
+        lexer.consume(tok_semicolon);
+        return;
+      default:
+        lexer.getNextToken();
+      }
+    }
+  }
 
   /// Get the precedence of the pending binary operator token, or -1 if the
   /// token is not a binary operator.
@@ -294,8 +331,7 @@ private:
     case tok_var:
       return parseVarExpr();
     default:
-      return parseError<ExprAST>("expression",
-                                 "when expecting a primary expression");
+      return parseError<ExprAST>("expression");
     }
   }
 
@@ -484,20 +520,59 @@ private:
                                          /*topLevelExpr=*/true);
   }
 
-  /// Helper function to signal errors while parsing. It takes an argument
-  /// indicating the expected token and another for more context. Location is
-  /// retrieved from the lexer and printed with the message. The explicit
+  /// Render the current token for an error message: keywords and
+  /// punctuation by their spelling, identifiers with their name, so
+  /// "expected ')', got 'def'" reads like the source does.
+  std::string describeCurToken() {
+    switch (lexer.getCurToken()) {
+    case tok_eof:
+      return "end of file";
+    case tok_def:
+      return "'def'";
+    case tok_extern:
+      return "'extern'";
+    case tok_if:
+      return "'if'";
+    case tok_then:
+      return "'then'";
+    case tok_else:
+      return "'else'";
+    case tok_for:
+      return "'for'";
+    case tok_in:
+      return "'in'";
+    case tok_binary:
+      return "'binary'";
+    case tok_unary:
+      return "'unary'";
+    case tok_var:
+      return "'var'";
+    case tok_identifier:
+      return ("identifier '" + lexer.getIdentifier() + "'").str();
+    case tok_number:
+      return "a number";
+    default:
+      if (isprint(lexer.getCurToken()))
+        return std::string("'") + static_cast<char>(lexer.getCurToken()) +
+               "'";
+      return "token " + std::to_string(lexer.getCurToken());
+    }
+  }
+
+  /// Report a parse error through the DiagnosticEngine. The explicit
   /// template parameter is the return type of the caller, so the call site
   /// reads as a drop-in `return parseError<ExprAST>(...)`.
-  template <typename R, typename T, typename U = const char *>
-  std::unique_ptr<R> parseError(T &&expected, U &&context = "") {
-    auto curToken = lexer.getCurToken();
-    llvm::errs() << "Parse error (" << lexer.getLastLocation().line << ", "
-                 << lexer.getLastLocation().col << "): expected '" << expected
-                 << "' " << context << " but has Token " << curToken;
-    if (isprint(curToken))
-      llvm::errs() << " '" << (char)curToken << "'";
-    llvm::errs() << "\n";
+  template <typename R>
+  std::unique_ptr<R> parseError(const llvm::Twine &expected,
+                                const llvm::Twine &context = "") {
+    // Build a std::string eagerly: a Twine must never be stored across
+    // statements (it holds references into its operands).
+    std::string msg = ("expected '" + expected + "'").str();
+    std::string ctx = context.str();
+    if (!ctx.empty())
+      msg += " " + ctx;
+    msg += ", got " + describeCurToken();
+    diags.error(lexer.getLastLocation(), msg);
     return nullptr;
   }
 };

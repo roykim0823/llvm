@@ -5,8 +5,9 @@
 upstream `toy.cpp` into a `src/` + `include/` + `test/` layout with classes in
 `namespace toy`. Directory N corresponds to tutorial chapter N
 (`LangImpl0N.html`); each chapter builds on the previous one. `ChapterA` is
-a separate MLIR-toy-style redesign with its own conventions — nothing in this
-file applies to it.
+a separate MLIR-toy-style redesign (with a DiagnosticEngine and a Sema pass;
+it absorbed the former `ChapterB`) with its own conventions — nothing in
+this file applies to it.
 
 `Kaleidoscope/README.md` (top level) is the reader-facing home for everything
 shared: the general compiler intro ("The shape of a compiler": three phases +
@@ -17,10 +18,48 @@ exposition. Chapter READMEs must NOT duplicate that material — they link to
 what their chapter adds. When common facts change, update the top README, not
 nine chapter READMEs.
 
-Policy: Chapter2–9 stay **faithful to upstream** — upstream quirks are kept
-deliberately (e.g. `getchar()`-based lexer, `operator[]` symbol lookups).
-Deviations are rare and intentional; when you find code that differs from the
-tutorial snippet, treat it as deliberate and document it, don't "fix" it.
+Policy: Chapter2–9 stay **behaviorally faithful to upstream** — upstream
+quirks are kept deliberately (e.g. `getchar()`-based lexer, `operator[]`
+symbol lookups), and the printed output must not change. Behavioral
+deviations are rare and intentional; when you find code that differs from
+the tutorial snippet, treat it as deliberate and document it, don't "fix" it.
+
+Structure is a different matter. The lexer and parser mirror upstream
+(globals → members). **Code generation uses ChapterA's architecture, adopted
+incrementally from Chapter3 on** (decided 2026-09-17; purpose: show a real
+compiler's structure, not a one-to-one port): AST nodes are pure data with
+kind tags + `classof()` + getters and NO `codegen()` virtuals; a public
+`CodeGenSession` facade (`include/codegen.h`, forward-declares
+`llvm::Function`/`llvm::Module` only) fronts a private
+`CodeGenSession::Impl` in `src/codegen.cpp` that owns
+theContext/theModule/builder/namedValues and dispatches via
+`emitExpr()`'s `switch (getKind())` to one `emit(XxxAST&)` per node; a
+`toy::Driver` (`include/driver.h`, `src/driver.cpp`) owns Lexer, Parser and
+CodeGenSession and runs `mainLoop()`/`handle*()` — the Parser produces AST
+only (no `mainLoop`, exposes `getCurToken()`). The tagged AST and the
+Driver already exist in Chapter2 (driver = lexer + parser, handlers print
+"Parsed a ..."), so `ast.h`, `parser.*`, `lexer.*`, `main.cpp` and the
+lexer/parser tests are byte-identical from Chapter2 through Chapter4 and
+Chapter3's diff is codegen-only. Chapter4 adds
+`takeModule()`/`setDataLayout()` to the facade and puts the JIT in the
+driver; Chapter6 keeps the precedence table in the parser (installed in
+`parseDefinition()`, erased if the body fails to parse) and reports unknown
+operators via `logErrorV` instead of asserting; prototypes are registered in
+`functionProtos` only after a body succeeds (Chapter4 on); Chapter7 uses
+`dyn_cast<VariableExprAST>` for the `=` LHS (upstream static_casts) and keeps
+the reverse-order `var` scope restore; Chapter8's driver owns a
+`TargetMachine` (no JIT), never calls `takeModule()`, erases top-level
+expressions via `codegen.eraseFunction()` (facade method, Chapter3 on; it
+clears the FAM cache before erasing) and restores the Chapter3 redefinition
+guard in codegen; Chapter9 adds
+debug-info options (`CodeGenOptions{optimize, emitDebugInfo, sourceFile}`,
+`finalize()`; the lexer owns the line/column counter and exposes
+`getTokLoc()`; AST nodes take a `SourceLocation` first; no `dump()` on the
+AST). Migration status: Chapter2–9 all converted (`ir_gen_ctx.h` no longer
+exists anywhere). ChapterA was the reference for this migration and is kept as the
+standalone redesign; the former ChapterB (its second iteration) was merged
+into it on 2026-09-17. It is NOT to be folded into Chapter9 (decided).
+
 Known deviations/gotchas: the lexer validates a leading `.` in numbers
 (`.5` → 0.5, lone `.` is an ASCII token); identifiers do NOT allow `_`;
 no scientific notation; `getTokPrecedence()` uses `map::find` instead of
@@ -61,8 +100,9 @@ Required shape (learned from review of Chapter2):
    gets a before → after snippet (side-by-side comments work well). Establish
    the groups by actually running `diff` against the previous dir, never by
    eyeballing. This section is reference material: place it near the END of
-   the README, right before "Build and run", and leave a one-line pointer to
-   it at the end of the intro.
+   the README, directly after the last chapter section and before
+   "Deviations from upstream" / "Build and run", and leave a one-line
+   pointer to it at the end of the intro.
 3. **Chapter sections with code**: split big chapters into numbered
    subsections under a short chapter-level intro (Chapter2 has
    "## Chapter 2: The Parser and AST" introducing the approach, then
@@ -76,9 +116,16 @@ Required shape (learned from review of Chapter2):
    too much. The single annotated block with `// [1]` markers is reserved
    for walking through the branches of ONE function (see Chapter2's
    `gettok()`), where a region covered in full elsewhere may be elided with
-   `...` and a pointer comment. Give every deliberate deviation
-   from upstream its own subsection: upstream snippet vs refactored snippet,
-   flow chart, step-by-step rationale, behavior-comparison table.
+   `...` and a pointer comment. Deliberate deviations from upstream are
+   NOT discussed inline: collect them in a `## Deviations from upstream`
+   section, the README's closing appendix: after "File-by-file" and right
+   before "Build and run" (in Chapter2, which has no "File-by-file", it
+   follows the last chapter section; Chapter2 is the reference for the
+   section's own shape). The main narrative shows the refactored code where
+   it belongs and leaves a one-line pointer to the section; each deviation
+   is a `###` subsection
+   there with upstream snippet vs refactored snippet (or excerpt), flow
+   chart, step-by-step rationale, behavior-comparison table.
 4. **Diagrams**: ASCII boxes/arrows in fenced code blocks (no mermaid).
    Pipeline/data-flow, class hierarchies, call graphs, example AST trees.
 5. **Code-block captions**: every fenced block quoting repo code gets a
@@ -105,7 +152,11 @@ Required shape (learned from review of Chapter2):
   `./build.sh`, which also pipes `cmd.txt` through the binary). LLVM via
   Homebrew, linked per-chapter via `llvm_map_components_to_libnames` —
   except Chapter2, which (like upstream's Chapter 2) has no LLVM build
-  dependency at all: no `find_package(LLVM)`, no deployment-target pin.
+  dependency at all: no `find_package(LLVM)`, no deployment-target/SDK pin.
+  Chapter3–9 and ChapterA pin `CMAKE_OSX_DEPLOYMENT_TARGET` *and*
+  `CMAKE_OSX_SYSROOT` before `project()`; dropping the sysroot pin breaks a
+  clean configure (the SDK's `/usr/include`, inherited from the imported LLVM
+  targets, shadows Homebrew clang's libc++ headers).
 - gtest unit tests fetched via FetchContent; binaries like `./build/lexer_test`.
 - lit/FileCheck: `test/filecheck/*.k` with `RUN:` lines; ctest registers a
   `filecheck` test that sets `TOY_BIN=$<TARGET_FILE:toy>` and

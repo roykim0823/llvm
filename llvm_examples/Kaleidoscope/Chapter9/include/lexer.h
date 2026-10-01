@@ -3,8 +3,6 @@
 
 #include <string>
 
-#include "debug.h"
-
 namespace toy {
 //===----------------------------------------------------------------------===//
 // Lexer
@@ -39,22 +37,33 @@ enum Token {
   tok_var = -13
 };
 
+/// A position in the source text, 1-based line and column (Chapter 9).
+struct SourceLocation {
+  int Line;
+  int Col;
+};
+
 class Lexer {
     public:
-    // Ch9. Add DebugInfoManager
-    DebugInfoManager &dbgMgr;
-    Lexer(DebugInfoManager &dbgMgr) : dbgMgr(dbgMgr) {}
-    // Ch9
-
     int gettok();
     double getNumVal() const { return numVal; }
     std::string getIdentifierStr() const { return identifierStr; }
 
+    /// Where the most recently returned token starts (Chapter 9). The parser
+    /// stamps this into the AST nodes it builds.
+    SourceLocation getTokLoc() const { return curLoc; }
+
 
     private:
+    /// Read one character from stdin, keeping the line/column counter current.
+    int advance();
+
     std::string identifierStr; // Filled in if tok_identifier
     double numVal = 0.0;       // Filled in if tok_number
     int lastChar = ' ';  // Used by gettok
+
+    SourceLocation lexLoc = {1, 0};  // position of the last character read
+    SourceLocation curLoc = {1, 0};  // position where the current token started
 };
 
 } // end namespace toy

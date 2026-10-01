@@ -4,6 +4,10 @@
 #include <memory>
 #include "ast.h"
 
+namespace llvm {
+class Value;
+}
+
 // LogError* - These are little helper functions for error handling.
 namespace toy {
 

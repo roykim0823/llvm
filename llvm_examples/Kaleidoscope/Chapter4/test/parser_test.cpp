@@ -4,7 +4,6 @@
 #include <memory>
 #include <unistd.h>
 #include "parser.h"
-#include "ir_gen_ctx.h"
 
 using namespace toy;
 
@@ -46,8 +45,7 @@ void verifyTest(bool shouldPass, std::unique_ptr<T> result, const std::string& i
 class ParseNumberExprTest : public ParserParamTest {};
 TEST_P(ParseNumberExprTest, parseNumberExpr) {
     Lexer lexer;
-    IRGenContext ctx;
-    Parser parser(lexer, ctx);
+    Parser parser(lexer);
     parser.getNextToken();
     verifyTest(GetParam().shouldPass, parser.parseNumberExpr(), GetParam().input);
 }
@@ -63,8 +61,7 @@ INSTANTIATE_TEST_SUITE_P(NumberTests, ParseNumberExprTest, ::testing::Values(
 class ParseIdentifierExprTest : public ParserParamTest {};
 TEST_P(ParseIdentifierExprTest, parseIdentifierExpr) {
     Lexer lexer;
-    IRGenContext ctx;
-    Parser parser(lexer, ctx);
+    Parser parser(lexer);
     parser.getNextToken();
     verifyTest(GetParam().shouldPass, parser.parseIdentifierExpr(), GetParam().input);
 }
@@ -83,8 +80,7 @@ INSTANTIATE_TEST_SUITE_P(IdentifierTests, ParseIdentifierExprTest, ::testing::Va
 class ParseParenExprTest : public ParserParamTest {};
 TEST_P(ParseParenExprTest, parseParenExpr) {
     Lexer lexer;
-    IRGenContext ctx;
-    Parser parser(lexer, ctx);
+    Parser parser(lexer);
     parser.getNextToken();
     verifyTest(GetParam().shouldPass, parser.parseParenExpr(), GetParam().input);
 }
@@ -103,8 +99,7 @@ TEST_P(ParseExpressionTest, parseExpression) {
     // This test covers the full expression parsing logic, including operator precedence and associativity.
     // parser.parseExpression() will call parsePrimary() and parseBinOpRHS() to build the AST according to the grammar.
     Lexer lexer;
-    IRGenContext ctx;
-    Parser parser(lexer, ctx);
+    Parser parser(lexer);
     parser.getNextToken();
     verifyTest(GetParam().shouldPass, parser.parseExpression(), GetParam().input);
 }
@@ -123,8 +118,7 @@ INSTANTIATE_TEST_SUITE_P(ExpressionTests, ParseExpressionTest, ::testing::Values
 class ParsePrototypeTest : public ParserParamTest {};
 TEST_P(ParsePrototypeTest, parsePrototype) {
     Lexer lexer;
-    IRGenContext ctx;
-    Parser parser(lexer, ctx);
+    Parser parser(lexer);
     parser.getNextToken();
     verifyTest(GetParam().shouldPass, parser.parsePrototype(), GetParam().input);
 }
@@ -142,8 +136,7 @@ INSTANTIATE_TEST_SUITE_P(PrototypeTests, ParsePrototypeTest, ::testing::Values(
 class ParseDefinitionTest : public ParserParamTest {};
 TEST_P(ParseDefinitionTest, parseDefinition) {
     Lexer lexer;
-    IRGenContext ctx;
-    Parser parser(lexer, ctx);
+    Parser parser(lexer);
     parser.getNextToken();
     verifyTest(GetParam().shouldPass, parser.parseDefinition(), GetParam().input);
 }
@@ -159,8 +152,7 @@ INSTANTIATE_TEST_SUITE_P(DefinitionTests, ParseDefinitionTest, ::testing::Values
 class ParseExternTest : public ParserParamTest {};
 TEST_P(ParseExternTest, parseExtern) {
     Lexer lexer;
-    IRGenContext ctx;
-    Parser parser(lexer, ctx);
+    Parser parser(lexer);
     parser.getNextToken();
     verifyTest(GetParam().shouldPass, parser.parseExtern(), GetParam().input);
 }
@@ -170,102 +162,108 @@ INSTANTIATE_TEST_SUITE_P(ExternTests, ParseExternTest, ::testing::Values(
     ParserTestCase{"ExternMissingKeyword", "cos(x)", false}
 ), [](const auto& info) { return info.param.testName; });
 
-// -----------------------------------------------------------------------------
-// JIT Execution Tests: These tests will parse an expression, generate LLVM IR, execute it
-// in the JIT, and verify the runtime result matches the expected value. This will test the full
-// pipeline from parsing to code generation to execution for various expressions.
-
-// 1. Define the parameters for the JIT execution tests
-struct JITTestCase {
-    std::string testName;
-    std::string expression;
-    double expectedResult;
-};
-
-// 2. Create the Parametric Fixture inheriting from CodegenTest
-class JITExecutionParamTest : public ::testing::TestWithParam<JITTestCase> {
+// --- 8. Tree shape ---
+// The suites above only ask "did it parse?". With the kind tags and getters
+// on the AST we can also ask "into what?" -- and pin the operator-precedence
+// algorithm's actual output. (Chapter 3 swaps these getKind() checks for
+// llvm::isa<>/llvm::cast<>, which call the same classof() under the hood.)
+class ParseTreeTest : public ::testing::Test {
 protected:
-    std::unique_ptr<IRGenContext> ctx;
-
-    void SetUp() override {
-        // Initialize a fresh IRGenContext for each test to ensure a clean slate
-        // for code generation and JIT execution
-        ctx = std::make_unique<IRGenContext>();
-
-        // Write the expression to a temporary file and redirect stdin to read from it,
-        // so the parser can read the expression as if it were user input.
-        // pid suffix: `ctest -j` runs cases of this binary concurrently.
-        tmpPath = "_jit_param_input_" + std::to_string(getpid()) + ".txt";
-        std::ofstream tmpFile(tmpPath);
-        tmpFile << GetParam().expression;
-        tmpFile.close();
-        ASSERT_TRUE(freopen(tmpPath.c_str(), "r", stdin) != nullptr);
+    // Feed `input` to the lexer via stdin and parse one expression.
+    std::unique_ptr<ExprAST> parseExpr(const std::string& input) {
+        tmpPath = "_parser_tree_input_" + std::to_string(getpid()) + ".txt";
+        std::ofstream(tmpPath) << input;
+        if (!freopen(tmpPath.c_str(), "r", stdin)) return nullptr;
+        lexer = std::make_unique<Lexer>();
+        parser = std::make_unique<Parser>(*lexer);
+        parser->getNextToken();
+        return parser->parseExpression();
     }
+    void TearDown() override { std::remove(tmpPath.c_str()); }
 
-    void TearDown() override {
-        // Clean up the temporary file and reset the context to free resources
-        std::remove(tmpPath.c_str());
-        ctx.reset();
+    // Downcasts that fail the test (and return null) on a kind mismatch.
+    static BinaryExprAST*   asBin(ExprAST* e)  { return kindIs(e, ExprAST::Expr_BinOp) ? static_cast<BinaryExprAST*>(e)   : nullptr; }
+    static VariableExprAST* asVar(ExprAST* e)  { return kindIs(e, ExprAST::Expr_Var)   ? static_cast<VariableExprAST*>(e) : nullptr; }
+    static NumberExprAST*   asNum(ExprAST* e)  { return kindIs(e, ExprAST::Expr_Num)   ? static_cast<NumberExprAST*>(e)   : nullptr; }
+    static CallExprAST*     asCall(ExprAST* e) { return kindIs(e, ExprAST::Expr_Call)  ? static_cast<CallExprAST*>(e)     : nullptr; }
+    static bool kindIs(ExprAST* e, ExprAST::ExprASTKind k) {
+        if (!e) { ADD_FAILURE() << "null node"; return false; }
+        if (e->getKind() != k) { ADD_FAILURE() << "wrong node kind: " << e->getKind() << " != " << k; return false; }
+        return true;
     }
 
     std::string tmpPath;
+    std::unique_ptr<Lexer> lexer;
+    std::unique_ptr<Parser> parser;
 };
 
-TEST_P(JITExecutionParamTest, EvaluateExpression) {
-    Lexer lexer;
-    Parser parser(lexer, *ctx);
-    
-    // Prime the parser by reading the first token, which is necessary before calling parseTopLevelExpr
-    parser.getNextToken(); 
+TEST_F(ParseTreeTest, PrecedenceTrace) {
+    // The README's trace: a + b * c - d  ==>  ((a + (b * c)) - d)
+    auto expr = parseExpr("a + b * c - d");
+    auto* minus = asBin(expr.get());
+    ASSERT_NE(minus, nullptr);
+    EXPECT_EQ(minus->getOp(), '-');
 
-    // 1. Parse the expression into an AST
-    auto ast = parser.parseTopLevelExpr();
-    ASSERT_NE(ast, nullptr) << "Failed to parse expression: " << GetParam().expression;
+    auto* plus = asBin(minus->getLHS());
+    ASSERT_NE(plus, nullptr);
+    EXPECT_EQ(plus->getOp(), '+');
+    ASSERT_NE(asVar(plus->getLHS()), nullptr);
+    EXPECT_EQ(asVar(plus->getLHS())->getName(), "a");
 
-    // 2. Generate LLVM IR from the AST
-    llvm::Function *F = ast->codegen(*ctx);
-    ASSERT_NE(F, nullptr) << "Failed to generate IR for expression: " << GetParam().expression;
+    auto* times = asBin(plus->getRHS());
+    ASSERT_NE(times, nullptr);
+    EXPECT_EQ(times->getOp(), '*');
+    EXPECT_EQ(asVar(times->getLHS())->getName(), "b");
+    EXPECT_EQ(asVar(times->getRHS())->getName(), "c");
 
-    // 3. Execute the generated IR in the JIT and verify the result
-    auto RT = ctx->theJIT->getMainJITDylib().createResourceTracker();
-
-    // 4. Package the module and context, then hand it to the JIT
-    auto TSM = llvm::orc::ThreadSafeModule(std::move(ctx->theModule), std::move(ctx->theContext));
-    ctx->ExitOnErr(ctx->theJIT->addModule(std::move(TSM), RT));
-
-    // 5. Immediately re-initialize the context's module and pass manager to maintain state integrity
-    ctx->InitializeModuleAndPassManager();
-
-    // 6. Look up the compiled symbol for the anonymous expression function
-    auto ExprSymbol = ctx->ExitOnErr(ctx->theJIT->lookup("__anon_expr"));
-
-    // 7. Cast the symbol address to a callable C++ function pointer and execute it
-    double (*FP)() = ExprSymbol.getAddress().toPtr<double (*)()>();
-    double actualResult = FP();
-
-    // 8. Verify the result matches the expected value
-    EXPECT_DOUBLE_EQ(actualResult, GetParam().expectedResult) 
-        << "Mismatch in expression: " << GetParam().expression;
-
-    // 9. Clean up JIT memory for this test case
-    ctx->ExitOnErr(RT->remove());
+    EXPECT_EQ(asVar(minus->getRHS())->getName(), "d");
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    MathOperations,
-    JITExecutionParamTest,
-    ::testing::Values(
-        // Basic arithmetic operations
-        JITTestCase{"Addition", "4.0 + 5.0", 9.0},
-        JITTestCase{"Subtraction", "10.0 - 2.5", 7.5},
-        JITTestCase{"Multiplication", "3.0 * 3.0", 9.0},
-        // Operator precedence and associativity
-        JITTestCase{"Precedence", "2.0 + 3.0 * 4.0", 14.0},
-        JITTestCase{"Parentheses", "(2.0 + 3.0) * 4.0", 20.0},
-        // Comparison operations (< operator returns 1.0 if true, 0.0 if false)
-        JITTestCase{"ComparisonTrue", "1.0 < 5.0", 1.0},
-        JITTestCase{"ComparisonFalse", "5.0 < 1.0", 0.0},
-        JITTestCase{"ComplexExpression", "(1.0 + 2.0) * (5.0 < 10.0) + 4.0", 7.0}
-    ),
-    [](const auto& info) { return info.param.testName; }
-);
+TEST_F(ParseTreeTest, LeftAssociative) {
+    // a - b - c  ==>  ((a - b) - c), never (a - (b - c))
+    auto expr = parseExpr("a - b - c");
+    auto* outer = asBin(expr.get());
+    ASSERT_NE(outer, nullptr);
+    auto* inner = asBin(outer->getLHS());
+    ASSERT_NE(inner, nullptr);
+    EXPECT_EQ(asVar(inner->getLHS())->getName(), "a");
+    EXPECT_EQ(asVar(inner->getRHS())->getName(), "b");
+    EXPECT_EQ(asVar(outer->getRHS())->getName(), "c");
+}
+
+TEST_F(ParseTreeTest, TighterOperatorFirst) {
+    // a * b + c  ==>  ((a * b) + c): no recursion needed, the loop merges as it goes
+    auto expr = parseExpr("a * b + c");
+    auto* plus = asBin(expr.get());
+    ASSERT_NE(plus, nullptr);
+    EXPECT_EQ(plus->getOp(), '+');
+    auto* times = asBin(plus->getLHS());
+    ASSERT_NE(times, nullptr);
+    EXPECT_EQ(times->getOp(), '*');
+    EXPECT_EQ(asVar(plus->getRHS())->getName(), "c");
+}
+
+TEST_F(ParseTreeTest, ParenthesesLeaveNoNode) {
+    // (a + b) * c  ==>  '*' over '+': the parentheses only shaped the tree
+    auto expr = parseExpr("(a + b) * c");
+    auto* times = asBin(expr.get());
+    ASSERT_NE(times, nullptr);
+    EXPECT_EQ(times->getOp(), '*');
+    auto* plus = asBin(times->getLHS());
+    ASSERT_NE(plus, nullptr);
+    EXPECT_EQ(plus->getOp(), '+');
+    EXPECT_EQ(asVar(times->getRHS())->getName(), "c");
+}
+
+TEST_F(ParseTreeTest, CallWithArguments) {
+    // foo(1, x)  ==>  CallExprAST("foo", [Number 1, Variable x])
+    auto expr = parseExpr("foo(1, x)");
+    auto* call = asCall(expr.get());
+    ASSERT_NE(call, nullptr);
+    EXPECT_EQ(call->getCallee(), "foo");
+    ASSERT_EQ(call->getArgs().size(), 2u);
+    ASSERT_NE(asNum(call->getArgs()[0].get()), nullptr);
+    EXPECT_DOUBLE_EQ(asNum(call->getArgs()[0].get())->getVal(), 1.0);
+    ASSERT_NE(asVar(call->getArgs()[1].get()), nullptr);
+    EXPECT_EQ(asVar(call->getArgs()[1].get())->getName(), "x");
+}

@@ -57,47 +57,52 @@ TEST_P(LexerParamTest, ProcessesInputCorrectly) {
 
 // Define the test cases
 INSTANTIATE_TEST_SUITE_P(
-  LexerTests,
-  LexerParamTest,
-  ::testing::Values(
-    // Keywords
-    LexerTestCase{"", tok_eof},
-    LexerTestCase{"def", tok_def},
-    LexerTestCase{"extern", tok_extern},
+    LexerTests,
+    LexerParamTest,
+    ::testing::Values(
+        // Keywords
+        LexerTestCase{"", tok_eof},
+        LexerTestCase{"def", tok_def},
+        LexerTestCase{"extern", tok_extern},
+        LexerTestCase{"if", tok_if},
+        LexerTestCase{"then", tok_then},
+        LexerTestCase{"else", tok_else},
+        LexerTestCase{"for", tok_for},
+        LexerTestCase{"in", tok_in},
+        LexerTestCase{"binary", tok_binary},
+        LexerTestCase{"unary", tok_unary},
 
-    LexerTestCase{"if", tok_if},
-    LexerTestCase{"then", tok_then},
-    LexerTestCase{"else", tok_else},
-    LexerTestCase{"for", tok_for},
-    LexerTestCase{"in", tok_in},
-    LexerTestCase{"binary", tok_binary},
-    LexerTestCase{"unary", tok_unary},
+        // Identifiers
+        LexerTestCase{"myVar", tok_identifier, "myVar"},
+        LexerTestCase{"x123", tok_identifier, "x123"},
+        LexerTestCase{"my_var", tok_identifier, "my"},  // '_' is not isalnum, so it ends the identifier: "my_var" lexes as my, '_', var
 
-    // Identifiers
-    LexerTestCase{"myVar", tok_identifier, "myVar"},
-    LexerTestCase{"x123", tok_identifier, "x123"},
+        // Numbers
+        LexerTestCase{"42", tok_number, "", 42.0},
+        LexerTestCase{"123.45", tok_number, "", 123.45},
+        LexerTestCase{"0.001", tok_number, "", 0.001},
+        LexerTestCase{"1.234567e+10", tok_number, "", 1.234567},  // the lexer stops at 'e' (not a digit/dot), so strtod never sees the exponent; 'e+10' is lexed as separate tokens
 
-    // Numbers
-    LexerTestCase{"42", tok_number, "", 42.0},
-    LexerTestCase{"123.45", tok_number, "", 123.45},
-    LexerTestCase{"0.001", tok_number, "", 0.001},
-    LexerTestCase{"1.234567e+10", tok_number, "", 1.234567},  // the lexer stops at 'e' (not a digit/dot), so strtod never sees the exponent; 'e+10' is lexed as separate tokens
-    LexerTestCase{".5", tok_number, "", 0.5},
-    LexerTestCase{".0123", tok_number, "", 0.0123},
-    LexerTestCase{"3.14.15", tok_number, "", 3.14}, // the lexer consumes all of "3.14.15"; strtod stops at the second dot
+        // Edge cases for numbers
+        LexerTestCase{".5", tok_number, "", 0.5},
+        LexerTestCase{"5.", tok_number, "", 5.0},
+        LexerTestCase{".", '.'},   // lone dot is NOT a number (deviation from upstream, which lexes it as 0.0)
+        LexerTestCase{".x", '.'},  // dot not followed by a digit: returned as ASCII '.', 'x' is left for the next call
+        LexerTestCase{".0123", tok_number, "", 0.0123},
+        LexerTestCase{"3.14.15", tok_number, "", 3.14}, // the lexer consumes all of "3.14.15"; strtod stops at the second dot
 
 
-    // Single characters (ASCII)
-    LexerTestCase{"+", '+'},
-    LexerTestCase{"(", '('},
-    LexerTestCase{"!", '!'},
-    LexerTestCase{"@", '@'},
-    LexerTestCase{">", '>'},
-    LexerTestCase{"|", '|'},
-    LexerTestCase{"&", '&'},
+        // Single characters (ASCII)
+        LexerTestCase{"+", '+'},
+        LexerTestCase{"(", '('},
+        LexerTestCase{"!", '!'},   // operator characters are plain ASCII tokens;
+        LexerTestCase{"@", '@'},   // the parser decides whether they are operators
+        LexerTestCase{">", '>'},
+        LexerTestCase{"|", '|'},
+        LexerTestCase{"&", '&'},
 
-    // Comments and Whitespace (should skip and return next token)
-    LexerTestCase{"# this is a comment\n42", tok_number, "", 42.0},
-    LexerTestCase{"   \t\n  def", tok_def}
-  )
+        // Comments and Whitespace (should skip and return next token)
+        LexerTestCase{"# this is a comment\n42", tok_number, "", 42.0},
+        LexerTestCase{"   \t\n  def", tok_def}
+    )
 );

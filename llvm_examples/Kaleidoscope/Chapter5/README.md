@@ -45,7 +45,8 @@ that's easy — and here it is, so this chapter's codegen emits them directly.
 
 Everything else — one type, JIT, optimizer — is as in
 [Chapter4](../Chapter4/README.md); parser/AST basics in
-[Chapter2](../Chapter2/README.md), codegen basics in
+[Chapter2](../Chapter2/README.md), the codegen architecture (the
+`CodeGenSession` facade, kind-tag dispatch, the `Driver`) in
 [Chapter3](../Chapter3/README.md).
 Reference: [Chapter 5: Extending the Language — Control Flow](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl05.html).
 
@@ -69,24 +70,30 @@ observable behavior, since Kaleidoscope expressions can have side effects
 select.
 
 The additions cut through every layer, and each one is textbook mechanics by
-now — new keywords in the lexer, new AST nodes, new productions in
-`parsePrimary()`, new `codegen()` overrides. Upstream's point in walking all
-four layers again is how cheaply a language *grows* once the pipeline
-exists:
+now — new keywords in the lexer, new AST nodes with new kind tags, new
+productions in `parsePrimary()`, new `emit()` overloads behind two new
+`switch` cases. Upstream's point in walking all four layers again is how
+cheaply a language *grows* once the pipeline exists:
 
 ```
-  lexer.h/.cpp     ast.h            parser.h/.cpp        codegen.cpp
-  tok_if  ──────▶  IfExprAST  ◀──── parseIfExpr()   ────▶ IfExprAST::codegen
-  tok_then                            (primary case)        4-block diamond + phi
-  tok_else
-  tok_for ──────▶  ForExprAST ◀──── parseForExpr()  ────▶ ForExprAST::codegen
-  tok_in                              (primary case)        loop block + phi + backedge
+  lexer.h/.cpp     ast.h                  parser.h/.cpp        codegen.cpp (Impl)
+  tok_if  ──────▶  IfExprAST  (Expr_If) ◀── parseIfExpr()  ──▶ emitExpr: case Expr_If
+  tok_then                                  (primary case)      └▶ emit(IfExprAST&)
+  tok_else                                                          4-block diamond + phi
+  tok_for ──────▶  ForExprAST (Expr_For)◀── parseForExpr() ──▶ emitExpr: case Expr_For
+  tok_in                                    (primary case)      └▶ emit(ForExprAST&)
+                                                                    loop block + phi + backedge
 ```
 
 Both constructs are **expressions**, not statements — an `if` yields the
 value of the taken branch (like C's `?:`), a `for` always yields `0.0`.
 That's what lets them slot into the existing grammar as just two more
 `primary` cases, with zero changes to `parseExpression`/`parseBinOpRHS`.
+And the public codegen header does not change at all: `codegen.h`,
+`driver.h`, `driver.cpp` and `main.cpp` are byte-identical to Chapter4's.
+Control flow is entirely an `Impl` matter — new node kinds in, the same
+`llvm::Function*` out — which is the payoff of Chapter3's facade showing up
+for the first time.
 
 (A precise file-by-file diff against Chapter4 is in
 [File-by-file](#file-by-file-what-changed-from-chapter4) near the end.)
@@ -119,61 +126,101 @@ AST and defaulted to `1.0` at codegen time:
   }
 ```
 
-The two AST nodes hold exactly their subtrees: `IfExprAST{Cond, Then, Else}`
-and `ForExprAST{VarName, Start, End, Step, Body}` — note the loop *variable
-name* is data here; it doesn't exist as a variable anywhere until codegen
-makes a phi for it.
+The two AST nodes hold exactly their subtrees, stamped with the two new kind
+tags, and expose them through getters for the code generator:
+
+**`Chapter5/include/ast.h`**
+```cpp
+/// ForExprAST - Expression class for for/in.
+class ForExprAST : public ExprAST {
+  std::string VarName;
+  std::unique_ptr<ExprAST> Start, End, Step, Body;
+
+public:
+  ForExprAST(const std::string &VarName, std::unique_ptr<ExprAST> Start,
+             std::unique_ptr<ExprAST> End, std::unique_ptr<ExprAST> Step,
+             std::unique_ptr<ExprAST> Body)
+      : ExprAST(Expr_For), VarName(VarName), Start(std::move(Start)),
+        End(std::move(End)), Step(std::move(Step)), Body(std::move(Body)) {}
+
+  const std::string &getVarName() const { return VarName; }
+  ExprAST *getStart() const { return Start.get(); }
+  ExprAST *getEnd() const { return End.get(); }
+  ExprAST *getStep() const { return Step.get(); }   // may be null: the step is optional
+  ExprAST *getBody() const { return Body.get(); }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_For; }
+};
+```
+
+(`IfExprAST{Cond, Then, Else}` follows the same pattern with `Expr_If`.)
+Note the loop *variable name* is data here; it doesn't exist as a variable
+anywhere until codegen makes a phi for it. And `getStep()` is the one getter
+in the AST that may legitimately return null — the parser's "optional"
+becomes the code generator's "default to 1.0".
+
+On the codegen side, the dispatch grows two cases — and since the `switch`
+in `emitExpr()` has no `default:`, forgetting one would be a compiler
+warning, not a runtime surprise:
+
+**`Chapter5/src/codegen.cpp`**
+```cpp
+    case ExprAST::Expr_If:
+      return emit(llvm::cast<IfExprAST>(expr));
+    case ExprAST::Expr_For:
+      return emit(llvm::cast<ForExprAST>(expr));
+```
 
 ## if/then/else codegen: The diamond and the phi
 
 **`Chapter5/src/codegen.cpp`**
 ```cpp
-llvm::Value *IfExprAST::codegen(IRGenContext &ctx) {
-  llvm::Value *CondV = Cond->codegen(ctx);
-  if (!CondV)
-    return nullptr;
+  llvm::Value *emit(IfExprAST &ifExpr) {
+    llvm::Value *CondV = emitExpr(*ifExpr.getCond());
+    if (!CondV)
+      return nullptr;
 
-  // Convert condition to a bool by comparing non-equal to 0.0.
-  CondV = ctx.builder->CreateFCmpONE(
-      CondV, llvm::ConstantFP::get(*ctx.theContext, llvm::APFloat(0.0)), "ifcond");
+    // Convert condition to a bool by comparing non-equal to 0.0.
+    CondV = builder->CreateFCmpONE(
+        CondV, llvm::ConstantFP::get(*theContext, llvm::APFloat(0.0)), "ifcond");
 
-  llvm::Function *TheFunction = ctx.builder->GetInsertBlock()->getParent();
+    llvm::Function *TheFunction = builder->GetInsertBlock()->getParent();
 
-  // Create blocks for the then and else cases.  Insert the 'then' block at the
-  // end of the function.
-  llvm::BasicBlock *ThenBB = llvm::BasicBlock::Create(*ctx.theContext, "then", TheFunction);
-  llvm::BasicBlock *ElseBB = llvm::BasicBlock::Create(*ctx.theContext, "else");
-  llvm::BasicBlock *MergeBB = llvm::BasicBlock::Create(*ctx.theContext, "ifcont");
+    // Create blocks for the then and else cases.  Insert the 'then' block at the
+    // end of the function.
+    llvm::BasicBlock *ThenBB = llvm::BasicBlock::Create(*theContext, "then", TheFunction);
+    llvm::BasicBlock *ElseBB = llvm::BasicBlock::Create(*theContext, "else");
+    llvm::BasicBlock *MergeBB = llvm::BasicBlock::Create(*theContext, "ifcont");
 
-  ctx.builder->CreateCondBr(CondV, ThenBB, ElseBB);
+    builder->CreateCondBr(CondV, ThenBB, ElseBB);
 
-  // Emit then value.
-  ctx.builder->SetInsertPoint(ThenBB);
-  llvm::Value *ThenV = Then->codegen(ctx);
-  if (!ThenV)
-    return nullptr;
-  ctx.builder->CreateBr(MergeBB);
-  // Codegen of 'Then' can change the current block, update ThenBB for the PHI.
-  ThenBB = ctx.builder->GetInsertBlock();
+    // Emit then value.
+    builder->SetInsertPoint(ThenBB);
+    llvm::Value *ThenV = emitExpr(*ifExpr.getThen());
+    if (!ThenV)
+      return nullptr;
+    builder->CreateBr(MergeBB);
+    // Codegen of 'Then' can change the current block, update ThenBB for the PHI.
+    ThenBB = builder->GetInsertBlock();
 
-  // Emit else block.
-  TheFunction->insert(TheFunction->end(), ElseBB);
-  ctx.builder->SetInsertPoint(ElseBB);
-  llvm::Value *ElseV = Else->codegen(ctx);
-  if (!ElseV)
-    return nullptr;
-  ctx.builder->CreateBr(MergeBB);
-  // Codegen of 'Else' can change the current block, update ElseBB for the PHI.
-  ElseBB = ctx.builder->GetInsertBlock();
+    // Emit else block.
+    TheFunction->insert(TheFunction->end(), ElseBB);
+    builder->SetInsertPoint(ElseBB);
+    llvm::Value *ElseV = emitExpr(*ifExpr.getElse());
+    if (!ElseV)
+      return nullptr;
+    builder->CreateBr(MergeBB);
+    // Codegen of 'Else' can change the current block, update ElseBB for the PHI.
+    ElseBB = builder->GetInsertBlock();
 
-  // Emit merge block.
-  TheFunction->insert(TheFunction->end(), MergeBB);
-  ctx.builder->SetInsertPoint(MergeBB);
-  llvm::PHINode *PN = ctx.builder->CreatePHI(llvm::Type::getDoubleTy(*ctx.theContext), 2, "iftmp");
-  PN->addIncoming(ThenV, ThenBB);
-  PN->addIncoming(ElseV, ElseBB);
-  return PN;
-}
+    // Emit merge block.
+    TheFunction->insert(TheFunction->end(), MergeBB);
+    builder->SetInsertPoint(MergeBB);
+    llvm::PHINode *PN = builder->CreatePHI(llvm::Type::getDoubleTy(*theContext), 2, "iftmp");
+    PN->addIncoming(ThenV, ThenBB);
+    PN->addIncoming(ElseV, ElseBB);
+    return PN;
+  }
 ```
 
 The mechanics worth slowing down for:
@@ -181,19 +228,21 @@ The mechanics worth slowing down for:
 - **Truthiness**: Kaleidoscope has no bool, so the condition is `fcmp one`
   ("ordered, not-equal") against `0.0` — any non-zero value is true.
 - **Finding the function to build into.**
-  `ctx.builder->GetInsertBlock()->getParent()` asks the builder for the
+  `builder->GetInsertBlock()->getParent()` asks the builder for the
   current block, then asks the block for its "parent" — the function it is
-  embedded in. New blocks need a function to (eventually) live in.
+  embedded in. New blocks need a function to (eventually) live in. Note
+  that `emit()` receives no `Function*` — the builder's cursor is the only
+  thread connecting an expression to the function `emitFunction()` opened.
 - **Every block must end in a terminator.** LLVM requires each basic block
   to be terminated by a control-flow instruction (`br`, `ret`, ...) — all
   control flow, *including fall-throughs*, is explicit in the IR, and the
   verifier reports an error otherwise. That is why both arms end with an
   explicit `CreateBr(MergeBB)`.
 - **The builder is a cursor, and recursion moves it.** After
-  `Then->codegen(ctx)` returns, the "current block" may be some deep
-  `ifcont` block of a *nested* if — not the `then` block we created. Two
-  consequences: the `br` to the merge block is emitted wherever the branch
-  chain actually ended, and `ThenBB = ctx.builder->GetInsertBlock()`
+  `emitExpr(*ifExpr.getThen())` returns, the "current block" may be some
+  deep `ifcont` block of a *nested* if — not the `then` block we created.
+  Two consequences: the `br` to the merge block is emitted wherever the
+  branch chain actually ended, and `ThenBB = builder->GetInsertBlock()`
   re-reads the block for the phi's incoming edge. Forgetting that re-read is
   the classic bug this chapter warns about — a phi's incoming block must be
   the *actual* predecessor.
@@ -233,39 +282,49 @@ The target shape, from the comment in the source:
 
 **`Chapter5/src/codegen.cpp`** (abridged — the shape-defining lines)
 ```cpp
-  llvm::Value *StartVal = Start->codegen(ctx);        // emitted in the preheader,
-                                                      // 'i' not in scope yet
-  llvm::BasicBlock *PreheaderBB = ctx.builder->GetInsertBlock();
-  llvm::BasicBlock *LoopBB = llvm::BasicBlock::Create(*ctx.theContext, "loop", TheFunction);
-  ctx.builder->CreateBr(LoopBB);                      // explicit fall-through edge
-  ctx.builder->SetInsertPoint(LoopBB);
+    llvm::Value *StartVal = emitExpr(*forExpr.getStart());   // emitted in the preheader,
+                                                             // 'i' not in scope yet
+    llvm::BasicBlock *PreheaderBB = builder->GetInsertBlock();
+    llvm::BasicBlock *LoopBB = llvm::BasicBlock::Create(*theContext, "loop", TheFunction);
+    builder->CreateBr(LoopBB);                               // explicit fall-through edge
+    builder->SetInsertPoint(LoopBB);
 
-  llvm::PHINode *Variable =
-      ctx.builder->CreatePHI(llvm::Type::getDoubleTy(*ctx.theContext), 2, VarName);
-  Variable->addIncoming(StartVal, PreheaderBB);       // first entry now...
+    const std::string &VarName = forExpr.getVarName();
+    llvm::PHINode *Variable =
+        builder->CreatePHI(llvm::Type::getDoubleTy(*theContext), 2, VarName);
+    Variable->addIncoming(StartVal, PreheaderBB);            // first entry now...
 
-  llvm::Value *OldVal = ctx.namedValues[VarName];     // shadow outer 'i', if any
-  ctx.namedValues[VarName] = Variable;
+    llvm::Value *OldVal = namedValues[VarName];              // shadow outer 'i', if any
+    namedValues[VarName] = Variable;
 
-  if (!Body->codegen(ctx))                            // value ignored, errors not
-    return nullptr;
-  ...
-  llvm::Value *NextVar = ctx.builder->CreateFAdd(Variable, StepVal, "nextvar");
-  EndCond = ctx.builder->CreateFCmpONE(EndCond, ..., "loopcond");
+    if (!emitExpr(*forExpr.getBody()))                       // value ignored, errors not
+      return nullptr;
 
-  llvm::BasicBlock *LoopEndBB = ctx.builder->GetInsertBlock();
-  ctx.builder->CreateCondBr(EndCond, LoopBB, AfterBB);
-  ctx.builder->SetInsertPoint(AfterBB);
+    llvm::Value *StepVal = nullptr;
+    if (ExprAST *Step = forExpr.getStep()) {                 // optional step...
+      StepVal = emitExpr(*Step);
+      if (!StepVal)
+        return nullptr;
+    } else {
+      StepVal = llvm::ConstantFP::get(*theContext, llvm::APFloat(1.0));   // ...defaults to 1.0
+    }
+    llvm::Value *NextVar = builder->CreateFAdd(Variable, StepVal, "nextvar");
+    ...
+    EndCond = builder->CreateFCmpONE(EndCond, ..., "loopcond");
 
-  Variable->addIncoming(NextVar, LoopEndBB);          // ...backedge entry last
+    llvm::BasicBlock *LoopEndBB = builder->GetInsertBlock();
+    builder->CreateCondBr(EndCond, LoopBB, AfterBB);
+    builder->SetInsertPoint(AfterBB);
 
-  if (OldVal)                                         // un-shadow
-    ctx.namedValues[VarName] = OldVal;
-  else
-    ctx.namedValues.erase(VarName);
+    Variable->addIncoming(NextVar, LoopEndBB);               // ...backedge entry last
 
-  // for expr always returns 0.0.
-  return llvm::Constant::getNullValue(llvm::Type::getDoubleTy(*ctx.theContext));
+    if (OldVal)                                              // un-shadow
+      namedValues[VarName] = OldVal;
+    else
+      namedValues.erase(VarName);
+
+    // for expr always returns 0.0.
+    return llvm::Constant::getNullValue(llvm::Type::getDoubleTy(*theContext));
 ```
 
 The notable moves:
@@ -284,7 +343,9 @@ The notable moves:
   restore/erase on the way out. Upstream notes the alternative — erroring
   when the name already exists — and deliberately chooses to allow
   shadowing. This two-line idiom is the entire "scoping
-  story" until Chapter 7 brings real mutable variables.
+  story" until Chapter 7 brings real mutable variables. (The unit test
+  `ForRestoresShadowedVariable` pins it: in `def f(i) (for i = 1, i < 3 in i) + i`
+  the trailing `i` must be the *argument* again, not the loop's phi.)
 - **Execution order is: body → step → end-condition.** The condition is
   tested *after* the body, against the **pre-increment** variable — do-while
   semantics. Two visible consequences: the body always runs at least once
@@ -297,6 +358,11 @@ The notable moves:
   it is used for its side effects, there being "nothing better to return";
   upstream notes loops get more useful once Chapter 7 adds mutable
   variables.
+- **Error paths leave nothing behind.** If the body (or step, or end
+  condition) fails, `emit()` returns null with the function half-built and
+  the builder parked in some inner block — and `emitFunction()`'s
+  `eraseFromParent()` cleans it all up, blocks included. That contract
+  from Chapter 3 needed no change to survive control flow.
 
 ## Real output at last: `putchard` and `extern_d.cpp`
 
@@ -323,9 +389,10 @@ extern "C" DLLEXPORT double printd(double X) {
 search finds the names as written. The build wrinkle (see the comment in
 `CMakeLists.txt`): these functions are *never referenced* by the compiler's
 own code, and a static archive drops unreferenced members at link time — so
-`extern_d.cpp` is listed directly in each executable's sources instead of
-going into `toy_core`, keeping the symbols in the process image where dlsym
-can see them.
+`extern_d.cpp` is listed directly in the sources of each executable that
+JITs (`toy` and `jit_test`) instead of going into `toy_core`, keeping the
+symbols in the process image where dlsym can see them. (`codegen_test` and
+`parser_test` never run code, so they don't need it.)
 
 The directory also gains a tiny helper, `view_cfg/`: `run.sh` pipes an `.ll`
 file through `opt -passes=view-cfg` to render a function's CFG with Graphviz
@@ -336,6 +403,8 @@ debugger.)
 
 ## File-by-file: What changed from Chapter4
 
+The exact split (established with `diff -rq ../Chapter4 .`):
+
 **New files**
 
 | File | Purpose |
@@ -345,9 +414,10 @@ debugger.)
 | `view_cfg/run.sh`, `view_cfg/t.ll` | Graphviz CFG viewer helper. |
 
 **Same filename, byte-identical** — safe to skip when reading:
-`include/ir_gen_ctx.h` (nothing about optimizer/JIT changes this chapter),
-`include/log.h`, `src/log.cpp`, `src/main.cpp`, `build.sh`,
-`test/filecheck/opt.k`, `test/filecheck/lit.cfg`.
+`include/codegen.h`, `include/driver.h`, `src/driver.cpp`, `src/main.cpp`
+(the facade, the driver and `main` know nothing about control flow),
+`include/log.h`, `src/log.cpp`, `build.sh`, `test/filecheck/opt.k`,
+`test/filecheck/lit.cfg`.
 
 **Same filename, modified** — before → after:
 
@@ -367,11 +437,23 @@ return tok_identifier;             if (identifierStr == "if")   return tok_if;
                                    return tok_identifier;
 ```
 
-`Chapter5/include/ast.h` — adds `IfExprAST` (Cond/Then/Else) and
-`ForExprAST` (VarName/Start/End/Step/Body); existing nodes untouched.
+`Chapter5/include/ast.h` — two new kind tags and two new node classes;
+existing nodes untouched:
+
+```cpp
+// Chapter4                                    // Chapter5
+enum ExprASTKind {                              enum ExprASTKind {
+  Expr_Num, Expr_Var, Expr_BinOp, Expr_Call,      Expr_Num, Expr_Var, Expr_BinOp, Expr_Call,
+};                                                Expr_If,    // NEW
+                                                  Expr_For,   // NEW
+                                                };
+                                                class IfExprAST  : public ExprAST { ... };   // NEW
+                                                class ForExprAST : public ExprAST { ... };   // NEW
+```
 
 `Chapter5/include/parser.h` / `src/parser.cpp` — adds `parseIfExpr()` and
-`parseForExpr()`, and `parsePrimary()` grows two cases:
+`parseForExpr()`, and `parsePrimary()` grows two cases (the grammar comment
+above it is expanded to list them):
 
 ```cpp
 // Chapter4                       // Chapter5
@@ -385,24 +467,29 @@ default: return logError(...);     case tok_if:  return parseIfExpr();
                                    }
 ```
 
-`Chapter5/src/codegen.cpp` — adds the two `codegen()` overrides explained
-above; everything else identical.
+`Chapter5/src/codegen.cpp` — pure additions: two `case`s in `emitExpr()`
+and the two `emit()` overloads explained above, in a new "Control flow"
+section of the `Impl`. Not a single existing line changes — `diff` shows
+no removed lines.
 
-`Chapter5/CMakeLists.txt` — `src/extern_d.cpp` added to the `toy`,
-`parser_test`, and `codegen_test` executables (deliberately *not* to the
-`toy_core` archive; see above).
+`Chapter5/CMakeLists.txt` — `src/extern_d.cpp` added to the `toy` and
+`jit_test` executables (deliberately *not* to the `toy_core` archive; see
+above).
 
 `Chapter5/test/lexer_test.cpp` — five new keyword cases (`"if"` → `tok_if`,
-...); the rest is a whitespace re-indent of the existing table.
+...).
 
 `Chapter5/test/parser_test.cpp` — two new parameterized suites:
 `ParseIfExprTest` (missing `then`/`else` must fail, nested if passes) and
 `ParseForExprTest` (step optional, missing `=`/`in` must fail).
 
-`Chapter5/test/codegen_test.cpp` — no new C++ checks; a comment redirects
-IR-structure verification for control flow to `controlflow.k` (block labels
-and canonicalized predicates pattern-match better in FileCheck than as
-substring loops).
+`Chapter5/test/codegen_test.cpp` — three control-flow cases against the
+facade: an if over opaque externs keeps its four blocks and returns the phi,
+a `for` restores a shadowed argument, and a body error inside a loop leaves
+no function behind.
+
+`Chapter5/test/jit_test.cpp` — the full-pipeline table gains if/for rows,
+and a hand-built recursive `fib` runs natively (`fib(10)` → `55`).
 
 `Chapter5/cmd.txt` — new demo: an if-diamond over opaque externs, and
 `printstar` printing `*` via `putchard`.
@@ -510,6 +597,19 @@ README](../README.md#testing-the-two-schemes). What Chapter 5 adds:
 - **`parser_test.cpp`**: `ParseIfExprTest` / `ParseForExprTest` pin the
   grammar — including that the step clause is optional and that a missing
   `then`, `else`, `=`, or `in` fails cleanly.
+- **`codegen_test.cpp`**: what the facade lets a caller observe about
+  control flow. `IfWithOpaqueArmsKeepsDiamondAndPhi` builds
+  `if x then foo() else bar()` over two externs and checks the function has
+  four blocks and returns a `PHINode`; `ForRestoresShadowedVariable` checks
+  that after `for i = ...` the name `i` refers to the argument again (the
+  final `fadd` takes `%i` the argument, not the phi); and
+  `ForBodyErrorLeavesNothingBehind` checks the Chapter 3 cleanup contract
+  still holds when the failure happens inside a loop body.
+- **`jit_test.cpp`**: the full-pipeline table gains `if`/`for` rows (taken
+  arm, untaken arm, nested if, loop with and without step — a `for` always
+  yields `0.0`), and `RecursiveFib` builds the intro's `fib` by hand, JITs
+  it, and calls it with `10.0` expecting `55.0` — recursion resolving within
+  its own module.
 - **`test/filecheck/controlflow.k`**: the CFG-shape checks, written around
   the fact that the driver prints **post-FPM** IR:
   - `testIfCfg` uses calls to *opaque externs* in both arms — possible side
@@ -529,5 +629,6 @@ README](../README.md#testing-the-two-schemes). What Chapter 5 adds:
 ```sh
 ctest --test-dir build                    # everything
 lit -v test/filecheck/controlflow.k       # the CFG-shape checks
+./build/jit_test                          # includes fib(10) and the if/for rows
 ./build/lexer_test                        # includes the new keyword cases
 ```

@@ -59,10 +59,27 @@ example operators are built from `if`), JIT/optimizer from
 [Chapter2](../Chapter2/README.md).
 Reference: [Chapter 6: Extending the Language — User-defined Operators](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl06.html).
 
-One refactor-specific structural change: the precedence table
-`binopPrecedence` **moves from `Parser` to `IRGenContext`**. Installing a new
-operator happens in `FunctionAST::codegen()` (see below), which only has the
-context — so the map's owner had to follow its writers.
+The two ideas map onto two components, and nothing else moves. The
+precedence table stays where Chapter 2 put it — in the `Parser` — and the
+parser itself installs a new operator the moment it has parsed the
+operator's prototype. The code generator learns one new node kind and one
+fallback: an operator it does not know is a call. The public codegen header,
+the driver and `main` are byte-identical to Chapter5's.
+
+```
+   Parser (parser.h/.cpp)                          CodeGenSession::Impl (codegen.cpp)
+     binopPrecedence  ◀── parseDefinition() installs   emitExpr: case Expr_Unary ──▶ emit(UnaryExprAST&)
+     parseUnary()          `binary<op> N` on parse        └▶ call "unary<op>"
+     parsePrototype()      (erases again if the           emit(BinaryExprAST&):
+       3 shapes            body fails to parse)           builtin '+','-','*','<' inline,
+                                                          anything else ──▶ call "binary<op>"
+```
+
+Upstream does it differently in one respect: it installs the precedence
+from *codegen* (`FunctionAST::codegen()` writes into `BinopPrecedence`),
+which is why upstream's parser and codegen share that global. Keeping the
+table in the parser is a deliberate deviation with a small behavioral
+consequence, explained in [Deviations from upstream](#deviations-from-upstream).
 
 (A precise file-by-file diff against Chapter5 is in
 [File-by-file](#file-by-file-what-changed-from-chapter5) near the end.)
@@ -100,10 +117,101 @@ prototype ::= id '(' id* ')'                    Kind 0: plain function
 
 After the argument list is read, `Kind` doubles as an arity check —
 `if (Kind && ArgNames.size() != Kind)` rejects a "binary" operator with one
-parameter. The prototype carries the new facts along
-(`PrototypeAST` gains `IsOperator` and `Precedence`, plus the helpers
-`isUnaryOp()` / `isBinaryOp()` — arity-based — and `getOperatorName()`,
-which is just the last character of the name).
+parameter. The prototype carries the new facts along:
+
+**`Chapter6/include/ast.h`**
+```cpp
+class PrototypeAST {
+  std::string Name;
+  std::vector<std::string> Args;
+  // for user-defined op
+  bool IsOperator;
+  unsigned Precedence;  // Precedence if a binary op
+
+public:
+  PrototypeAST(const std::string &Name, std::vector<std::string> Args,
+               bool IsOperator = false, unsigned Prec = 0)
+      : Name(Name), Args(std::move(Args)), IsOperator(IsOperator),
+        Precedence(Prec) {}
+
+  const std::string &getName() const { return Name; }
+  const std::vector<std::string> &getArgs() const { return Args; }
+
+  // for user-defined op
+  bool isUnaryOp() const { return IsOperator && Args.size() == 1; }
+  bool isBinaryOp() const { return IsOperator && Args.size() == 2; }
+
+  char getOperatorName() const {
+    assert(isUnaryOp() || isBinaryOp());
+    return Name[Name.size() - 1];
+  }
+
+  unsigned getBinaryPrecedence() const { return Precedence; }
+};
+```
+
+`isUnaryOp()` / `isBinaryOp()` are arity-based, and `getOperatorName()` is
+just the last character of the name — `"binary|"` → `'|'`. The defaults keep
+every existing `PrototypeAST(name, args)` call site working unchanged.
+
+### Installing the operator: `parseDefinition()`
+
+This is where the grammar extends itself. Once the prototype of a
+definition is in hand, the parser knows everything the precedence table
+needs — the character and the number — and writes the row *before* parsing
+the body:
+
+**`Chapter6/src/parser.cpp`**
+```cpp
+// definition ::= 'def' prototype expression
+std::unique_ptr<FunctionAST> Parser::parseDefinition() {
+    getNextToken(); // eat def
+    auto proto = parsePrototype();
+    if (!proto) return nullptr;
+
+    // A user-defined binary operator becomes part of the grammar as soon as its
+    // prototype is parsed -- before the body, which may use it recursively, and
+    // before any subsequent input. (Upstream installs it in FunctionAST::codegen.)
+    bool installedOp = false;
+    int previousPrec = -1;  // -1: the operator was not in the table before
+    if (proto->isBinaryOp()) {
+        char op = proto->getOperatorName();
+        auto it = binopPrecedence.find(op);
+        if (it != binopPrecedence.end()) previousPrec = it->second;
+        binopPrecedence[op] = proto->getBinaryPrecedence();
+        installedOp = true;
+    }
+
+    auto e = parseExpression();
+    if (!e) {
+        // The operator was never really (re)defined: put the table back the way
+        // it was, so later input does not parse against a function that will
+        // not exist -- or against a precedence that never took effect.
+        if (installedOp) {
+            char op = proto->getOperatorName();
+            if (previousPrec < 0) binopPrecedence.erase(op);
+            else binopPrecedence[op] = previousPrec;
+        }
+        return nullptr;
+    }
+    return std::make_unique<FunctionAST>(std::move(proto), std::move(e));
+}
+```
+
+Two consequences of installing here rather than after codegen. First, the
+operator is usable **inside its own body** — `def binary| 5 (a b) a | b`
+parses (and codegens to a recursive call), which is the natural thing for a
+definition to allow. Second, the table is kept honest by the parser alone:
+if the body fails to *parse*, the row is put back the way it was — removed
+if the operator was new, restored to its previous precedence if this was a
+redefinition — so a stray `|` on the next line is an unknown *unary*
+operator (an ordinary error) rather than a binary operator with no function
+behind it, and a failed redefinition does not silently change how an
+existing operator binds. The
+table never leaves the parser, and codegen never touches it —
+`getTokPrecedence()` is exactly Chapter 2's.
+
+### The `unary` layer
 
 Unary operators need one real grammar change. Until now the operand of a
 binary operator was a `primary`; now there is a layer in between:
@@ -139,71 +247,80 @@ to be parse errors and now **parse fine** (as applications of a unary `+`) —
 they only fail later, at codegen, if no `unary+` was defined. Two parser
 tests flipped from must-fail to must-pass because of this.
 
+The node is the smallest in the AST — an opcode and one operand, with the
+kind tag `Expr_Unary`:
+
+**`Chapter6/include/ast.h`**
+```cpp
+/// UnaryExprAST - Expression class for a unary operator.
+class UnaryExprAST : public ExprAST {
+  char Opcode;
+  std::unique_ptr<ExprAST> Operand;
+
+public:
+  UnaryExprAST(char Opcode, std::unique_ptr<ExprAST> Operand)
+      : ExprAST(Expr_Unary), Opcode(Opcode), Operand(std::move(Operand)) {}
+
+  char getOpcode() const { return Opcode; }
+  ExprAST *getOperand() const { return Operand.get(); }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Unary; }
+};
+```
+
 ## Codegen: Fall back to a call
 
-`UnaryExprAST::codegen()` is nothing but the desugaring:
+The dispatch in `emitExpr()` grows its one new case, and the `emit()`
+overload for it is nothing but the desugaring:
 
 **`Chapter6/src/codegen.cpp`**
 ```cpp
-llvm::Value *UnaryExprAST::codegen(IRGenContext &ctx) {
-  llvm::Value *OperandV = Operand->codegen(ctx);
-  if (!OperandV)
-    return nullptr;
+  llvm::Value *emit(UnaryExprAST &unary) {
+    llvm::Value *OperandV = emitExpr(*unary.getOperand());
+    if (!OperandV)
+      return nullptr;
 
-  llvm::Function *F = getFunction(std::string("unary") + Opcode, ctx);
-  if (!F)
-    return logErrorV("Unknown unary operator");
+    llvm::Function *F = getFunction(std::string("unary") + unary.getOpcode());
+    if (!F)
+      return logErrorV("Unknown unary operator");
 
-  return ctx.builder->CreateCall(F, OperandV, "unop");
-}
+    return builder->CreateCall(F, OperandV, "unop");
+  }
 ```
 
 It is simpler than the binary version for one reason: there are no
 *built-in* unary operators to special-case, so the call is the whole story.
-(Note it also fails softly with `logErrorV` — an undefined unary operator
+`getFunction()` is Chapter 4's registry-aware lookup, so an operator defined
+three modules ago is re-declared into this one exactly like any other
+function. And it fails softly with `logErrorV` — an undefined unary operator
 is reachable from ordinary input, since `parseUnary` presumes any operator
-character is unary.)
+character is unary.
 
-`BinaryExprAST::codegen()` keeps the four built-ins inline and adds a
+`emit(BinaryExprAST&)` keeps the four built-ins inline and adds a
 fallthrough — the `default:` that used to be an error now `break`s into:
 
 **`Chapter6/src/codegen.cpp`**
 ```cpp
-  // If it wasn't a builtin binary operator, it must be a user defined one. Emit
-  // a call to it.
-  llvm::Function *F = getFunction(std::string("binary") + Op, ctx);
-  assert(F && "binary operator not found!");
+    // If it wasn't a builtin binary operator, it must be a user defined one. Emit
+    // a call to it. (Upstream asserts here; we report, since a definition whose
+    // body failed can leave the parser accepting an operator no function backs.)
+    llvm::Function *F = getFunction(std::string("binary") + bin.getOp());
+    if (!F)
+      return logErrorV("Unknown binary operator");
 
-  llvm::Value *Ops[] = {L, R};
-  return ctx.builder->CreateCall(F, Ops, "binop");
+    llvm::Value *Ops[] = {L, R};
+    return builder->CreateCall(F, Ops, "binop");
 ```
 
-Note the `assert` — an upstream quirk kept deliberately. It is justified
-upstream by the invariant that the parser only *classifies* a character as a
-binary operator if it's in the precedence table, and it only gets into the
-table when its definition codegens. But in a release build an undefined
-operator here is UB rather than a clean error (the earlier chapters'
-`logErrorV` was strictly safer); this is flagged for the v2 refactor.
-
-The registration itself happens in `FunctionAST::codegen()` — a definition's
-side effect on the *parser's* future behavior:
-
-**`Chapter6/src/codegen.cpp`**
-```cpp
-  // If this is an operator, install it.
-  if (P.isBinaryOp())
-    ctx.binopPrecedence[P.getOperatorName()] = P.getBinaryPrecedence();
-  ...
-  // If the body failed, the operator was never really defined; unregister its
-  // precedence so a later use doesn't reach codegen with no function to call.
-  if (P.isBinaryOp())
-    ctx.binopPrecedence.erase(P.getOperatorName());
-```
-
-This is the interesting loop in the architecture: the REPL parses a
-definition, codegen installs the precedence, and *the next line of input
-parses differently than it would have before*. Language extension as a
-runtime side effect.
+Upstream has an `assert(F && "binary operator not found!")` here, justified
+by the invariant that a character only reaches this point if its definition
+codegen'd. Here the invariant is weaker on purpose — see
+[Deviations from upstream](#deviations-from-upstream) — so the fallback
+reports like every other codegen error and the REPL carries on. That is the
+whole of the codegen change: no state, no table, no registration. The
+"language extension as a runtime side effect" loop the tutorial describes —
+parse a definition, and *the next line of input parses differently* — runs
+entirely inside the parser.
 
 ## The payoff: A Mandelbrot set
 
@@ -309,6 +426,8 @@ construction" phase onto the frontend.
 
 ## File-by-file: What changed from Chapter5
 
+The exact split (established with `diff -rq ../Chapter5 .`):
+
 **New files**
 
 | File | Purpose |
@@ -319,9 +438,11 @@ construction" phase onto the frontend.
 | `test/filecheck/userops.k` | End-to-end operator checks (see Tests). |
 
 **Same filename, byte-identical** — safe to skip when reading:
-`CMakeLists.txt`, `include/log.h`, `src/log.cpp`, `src/main.cpp`,
-`src/extern_d.cpp`, `view_cfg/*`, `test/filecheck/opt.k`,
-`test/filecheck/controlflow.k`, `test/filecheck/lit.cfg`.
+`include/codegen.h`, `include/driver.h`, `src/driver.cpp`, `src/main.cpp`
+(the facade, the driver and `main` know nothing about operators),
+`include/log.h`, `src/log.cpp`, `src/extern_d.cpp`, `CMakeLists.txt`,
+`view_cfg/*`, `test/filecheck/opt.k`, `test/filecheck/controlflow.k`,
+`test/filecheck/lit.cfg`.
 
 **Same filename, modified** — before → after:
 
@@ -329,11 +450,14 @@ construction" phase onto the frontend.
 `tok_binary = -11` and `tok_unary = -12`, with the matching keyword checks
 in `gettok()`.
 
-`Chapter6/include/ast.h` — adds `UnaryExprAST{Opcode, Operand}`;
-`PrototypeAST` grows the operator metadata:
+`Chapter6/include/ast.h` — one new kind tag and node, and the prototype
+grows the operator metadata:
 
 ```cpp
 // Chapter5                              // Chapter6
+enum ExprASTKind { ..., Expr_For };       enum ExprASTKind { ..., Expr_For, Expr_Unary };
+                                          class UnaryExprAST : public ExprAST { ... };   // NEW
+
 PrototypeAST(const std::string &Name,     PrototypeAST(const std::string &Name,
              std::vector<std::string>                  std::vector<std::string> Args,
              Args)                                     bool IsOperator = false,
@@ -346,28 +470,36 @@ PrototypeAST(const std::string &Name,     PrototypeAST(const std::string &Name,
                                           unsigned getBinaryPrecedence() const;
 ```
 
-`Chapter6/include/parser.h` / `include/ir_gen_ctx.h` — the precedence table
-changes owner; the parser reads it through `ctx`:
+`Chapter6/include/parser.h` — `parseUnary()` declared; the precedence table
+keeps its owner and gains a comment saying who writes it now.
+
+`Chapter6/src/parser.cpp` — `parseUnary()` added;
+`parseExpression()`/`parseBinOpRHS()` call it where they called
+`parsePrimary()`; `parsePrototype()` rewritten as the three-case switch
+above; `parseDefinition()` installs (and on parse failure erases) the
+operator's precedence:
 
 ```cpp
-// Chapter5: Parser constructor          // Chapter6: IRGenContext constructor
-Parser(...) {                             IRGenContext() {
-    binopPrecedence['<'] = 10;                ...
-    binopPrecedence['+'] = 20;                binopPrecedence['<'] = 10;
-    binopPrecedence['-'] = 20;                binopPrecedence['+'] = 20;
-    binopPrecedence['*'] = 40;                binopPrecedence['-'] = 20;
-}                                             binopPrecedence['*'] = 40;
-                                          }
+// Chapter5                                   // Chapter6
+auto proto = parsePrototype();                 auto proto = parsePrototype();
+if (!proto) return nullptr;                    if (!proto) return nullptr;
+                                               bool installedOp = false;
+                                               if (proto->isBinaryOp()) {            // NEW
+                                                 binopPrecedence[op] = prec;
+                                                 installedOp = true;
+                                               }
+if (auto e = parseExpression())                auto e = parseExpression();
+  return make_unique<FunctionAST>(...);        if (!e) {
+return nullptr;                                  if (installedOp) /* erase, or restore old row */;
+                                                 return nullptr;
+                                               }
+                                               return make_unique<FunctionAST>(...);
 ```
 
-`Chapter6/src/parser.cpp` — `getTokPrecedence()` reads `ctx.binopPrecedence`;
-`parseUnary()` added; `parseExpression()`/`parseBinOpRHS()` call it where
-they called `parsePrimary()`; `parsePrototype()` rewritten as the three-case
-switch above.
-
-`Chapter6/src/codegen.cpp` — `UnaryExprAST::codegen()` added;
-`BinaryExprAST::codegen()` gains the user-operator fallthrough;
-`FunctionAST::codegen()` installs (and on failure erases) the precedence.
+`Chapter6/src/codegen.cpp` — one new `case` in `emitExpr()`,
+`emit(UnaryExprAST&)` added, and `emit(BinaryExprAST&)`'s `default:` goes
+from `return logErrorV("invalid binary operator")` to `break` + the
+user-operator fallthrough. `diff` shows exactly one removed line.
 
 `Chapter6/build.sh` — no longer pipes `cmd.txt` automatically; running the
 demos moved to the new `run.sh`.
@@ -380,21 +512,137 @@ the operator characters (`!`, `@`, `>`, `|`, `&`) as plain ASCII tokens.
 
 `Chapter6/test/parser_test.cpp` — new `ParseUnaryExprTest` (nesting `!!x`,
 missing operand fails); prototype cases for operator forms including the
-1..100 precedence validation and the operand-count check; and the two flipped
-expectations noted above (`+ 10`, `10 ++ 5` now parse).
+1..100 precedence validation and the operand-count check; definition cases
+including an operator used in its own body; the two flipped expectations
+noted above (`+ 10`, `10 ++ 5` now parse); and two tree-shape tests —
+`UserOperatorChangesLaterParse` parses `def binary| 5 (a b) a;` and then
+checks that the *same* parser reads `a | b + c` as `a | (b + c)`, and
+`UnaryTree` checks `!!x` nests.
 
-`Chapter6/test/codegen_test.cpp` — new `UnaryOpTest` (mocks a `unary<op>`
-function, checks the generated call) and a `createInsertionPoint()` fixture
-helper (expression codegen needs a block to insert into, or non-folded
-instructions leak parentless). The `'?'`-is-invalid case from earlier
-chapters is deleted, with a comment explaining why: since the `assert`
-replaced `logErrorV`, an unknown operator aborts rather than returning an
-error — kept for upstream fidelity, to be restored in v2.
+`Chapter6/test/codegen_test.cpp` — four operator cases through the facade:
+a unary and a user binary operator each desugar to a call of the declared
+function, an unknown unary operator is an error, and a builtin stays inline
+even when a `binary+` is declared. The `'?'`-is-invalid case is kept (see
+Deviations).
+
+`Chapter6/test/jit_test.cpp` — `JITCustomOperatorParamTest`: one `def`, then
+an expression parsed by the same parser and run natively — a binary and a
+unary operator, loose vs. tight precedence against `+` (same text shape,
+different results: `6.0` vs `7.0`), and an operator used recursively in
+its own body.
 
 `Chapter6/test/filecheck/jit.k` — carried forward from Chapter5 and
 extended: a user-defined `binary%` (precedence 40, `a - b`) is defined and
 then `10 % 3;` must print `Evaluated to 7.000000` — the full
 define → install-precedence → reparse → JIT → execute loop in two lines.
+
+## Deviations from upstream
+
+Chapter2–9 keep the tutorial's behavior, quirks included. This chapter
+departs from it in two related places, collected here so the main narrative
+above can follow the tutorial's order. Neither changes what any of the
+chapter's inputs print — `cmd.txt`, `mandel.txt` and every `.k` file
+produce byte-identical output — but both change what happens on *bad*
+input.
+
+### The precedence table stays in the parser
+
+Upstream installs a new operator's precedence from codegen:
+
+```cpp
+// upstream (LangImpl06)
+Function *FunctionAST::codegen() {
+  // Transfer ownership of the prototype to the FunctionProtos map, but keep a
+  // reference to it for use below.
+  auto &P = *Proto;
+  FunctionProtos[Proto->getName()] = std::move(Proto);
+  Function *TheFunction = getFunction(P.getName());
+  if (!TheFunction)
+    return nullptr;
+
+  // If this is an operator, install it.
+  if (P.isBinaryOp())
+    BinopPrecedence[P.getOperatorName()] = P.getBinaryPrecedence();
+  ...
+```
+
+— which is why the earlier version of this chapter moved the table from the
+parser into the codegen state: the map had to follow its writer. Here the
+writer is the parser itself, in `parseDefinition()`, as shown above:
+
+**`Chapter6/src/parser.cpp`** (abridged)
+```cpp
+    bool installedOp = false;
+    int previousPrec = -1;
+    if (proto->isBinaryOp()) {
+        ...remember the old row, if any...
+        binopPrecedence[op] = proto->getBinaryPrecedence();
+        installedOp = true;
+    }
+    auto e = parseExpression();
+    if (!e) {
+        if (installedOp) ...erase the row, or restore the old one...
+        return nullptr;
+    }
+```
+
+Why: the precedence of an operator is a *grammar* fact — it determines how
+tokens group — and the parser is the component that owns the grammar. The
+code generator does not need to know that `|` binds looser than `+`; it
+only needs to know that `|` is not one of its four builtins. Routing the
+information through codegen forces the parser and the code generator to
+share state, which is exactly the coupling the facade exists to avoid
+(`codegen.h` would otherwise need to expose the table). It also fixes a
+timing oddity: upstream installs the row only after the whole definition —
+prototype *and* body — has been parsed, so the operator is not available
+inside its own body.
+
+|                                          | upstream (installed by codegen)                 | here (installed by the parser)                  |
+| ---------------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
+| `def binary\| 5 (a b) a \| b`            | body fails to parse: `\|` is not yet an operator | parses; the body is a recursive call            |
+| definition parses, body fails to codegen | row stays installed                              | row stays installed                              |
+| definition's body fails to *parse*       | row never installed / old row untouched          | row installed then erased or restored — same net effect |
+| who owns `binopPrecedence`               | codegen state (shared global)                    | `Parser`                                         |
+
+### An unknown binary operator is an error, not an assertion
+
+Upstream ends `BinaryExprAST::codegen()` with:
+
+```cpp
+// upstream (LangImpl06)
+  // If it wasn't a builtin binary operator, it must be a user defined one. Emit
+  // a call to it.
+  Function *F = getFunction(std::string("binary") + Op);
+  assert(F && "binary operator not found!");
+```
+
+Here the same spot reports and returns null:
+
+**`Chapter6/src/codegen.cpp`**
+```cpp
+    llvm::Function *F = getFunction(std::string("binary") + bin.getOp());
+    if (!F)
+      return logErrorV("Unknown binary operator");
+```
+
+Why: the assertion encodes an invariant — "if the parser accepted the
+character as a binary operator, its function exists" — that does not hold
+in either design once a definition's *body fails to codegen*. Upstream
+leaves the precedence row installed in that case (see the table above), so
+the next use of the operator parses fine and reaches this line with no
+function to call: an abort in a debug build, undefined behavior in release.
+With the parser owning the table the row stays installed too, but the
+failed definition is never registered (Chapter 4's register-on-success
+rule), so `getFunction()` returns null and the user sees
+`Error: Unknown binary operator` — the REPL continues. It also means the
+`'?'`-is-invalid case in `codegen_test.cpp`, which upstream's assertion
+made untestable, is back.
+
+|                                             | upstream                                   | here                                         |
+| ------------------------------------------- | ------------------------------------------ | -------------------------------------------- |
+| `1 ? 2` with no `binary?` defined           | `1` evaluates; `? 2` is `Error: Unknown unary operator` | same (the unary layer, not the table, claims `?`) |
+| `def binary% 40 (a b) y;` then `10 % 3;`    | abort (debug) / UB (release)                | `Error: Unknown binary operator`, REPL continues |
+| a defined operator                          | call                                        | call                                         |
 
 ## Build and run
 
@@ -443,10 +691,19 @@ README](../README.md#testing-the-two-schemes). What Chapter 6 adds:
   purely because of the precedence in the *earlier* definition.
 - **`parser_test.cpp` / `lexer_test.cpp`** — grammar-level pinning: unary
   nesting, operator-prototype forms, precedence range validation, arity
-  validation, and the two deliberate must-pass flips.
-- **`codegen_test.cpp`** — `UnaryOpTest` verifies the desugared call at the
-  API level against a mocked `unary<op>`; the invalid-operator case is
-  retired (see above — `assert` aborts, nothing to assert on from gtest).
+  validation, the two deliberate must-pass flips, and — now that the parser
+  owns the table — the stateful property at the unit level too:
+  `UserOperatorChangesLaterParse` shows one `Parser` instance reading
+  `a | b + c` differently after it has parsed `def binary| 5 ...`.
+- **`codegen_test.cpp`** — the desugaring at the API level: a unary and a
+  user binary operator become calls to the declared `unary<op>` /
+  `binary<op>` function, a builtin stays an `fadd` even if a `binary+`
+  exists, and both "unknown operator" paths return null instead of
+  asserting.
+- **`jit_test.cpp`** — `JITCustomOperatorParamTest` runs define → parse →
+  JIT → call for a table of operators, including the loose-vs-tight
+  precedence pair (`1 @ 2 + 3` is `6.0` at precedence 5 and would be `7.0`
+  for `2 @ 3 + 1` at precedence 50) and an operator calling itself.
 - **`test/filecheck/jit.k`** (carried from Chapter5) — the evaluate-loop and
   error-recovery checks, plus this chapter's addition: `def binary% 40 (a b)
   a - b;` then `10 % 3;` → `Evaluated to 7.000000`, executing a user-defined
@@ -455,5 +712,6 @@ README](../README.md#testing-the-two-schemes). What Chapter 6 adds:
 ```sh
 ctest --test-dir build                # everything
 lit -v test/filecheck/userops.k       # operator precedence end-to-end
+./build/jit_test                      # includes the custom-operator table
 ./run.sh                              # demos incl. the Mandelbrot render
 ```

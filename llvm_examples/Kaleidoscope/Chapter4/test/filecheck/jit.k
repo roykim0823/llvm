@@ -21,6 +21,11 @@ sin(1.0);
 def bad(x) y;
 # CHECK: Error: Unknown variable name
 
+# A definition whose body failed is not registered: calling it is an ordinary
+# error, not an unresolvable JIT symbol.
+bad(1.0);
+# CHECK: Error: Unknown function referenced
+
 unknownfn(1.0);
 # CHECK: Error: Unknown function referenced
 

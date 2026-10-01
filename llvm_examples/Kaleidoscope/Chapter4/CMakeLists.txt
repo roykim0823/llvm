@@ -1,12 +1,29 @@
 cmake_minimum_required(VERSION 3.20)
 
 # Match the deployment target to the host macOS release so this project and
-# the Homebrew LLVM libraries agree (avoids version-mismatch link warnings).
+# the Homebrew LLVM libraries agree (avoids version-mismatch link warnings),
+# and pin the SDK explicitly. CMake no longer fills CMAKE_OSX_SYSROOT in by
+# itself for a non-Apple compiler; without it, the SDK's /usr/include (which
+# the imported LLVM targets carry along, having found zlib/libedit/ffi there)
+# reaches the compile line as -isystem ahead of Homebrew clang's own libc++
+# headers, and libc++'s #include_next chain fails with "<cstdio> tried
+# including <stdio.h> but didn't find libc++'s <stdio.h> header". With the
+# sysroot set, CMake knows those paths are implicit and drops them.
 if(APPLE)
   execute_process(COMMAND sw_vers -productVersion
                   OUTPUT_VARIABLE _macos_version
                   OUTPUT_STRIP_TRAILING_WHITESPACE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "${_macos_version}" CACHE STRING "macOS Deployment Target" FORCE)
+
+  if(NOT CMAKE_OSX_SYSROOT)
+    execute_process(COMMAND xcrun --show-sdk-path
+                    OUTPUT_VARIABLE _macos_sdk
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+    if(_macos_sdk)
+      set(CMAKE_OSX_SYSROOT "${_macos_sdk}" CACHE STRING "macOS SDK" FORCE)
+    endif()
+  endif()
 endif()
 
 project(Kaleidoscope)
@@ -29,6 +46,7 @@ add_library(toy_core STATIC
     src/lexer.cpp
     src/parser.cpp
     src/codegen.cpp
+    src/driver.cpp
     src/log.cpp
 )
 target_include_directories(toy_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -60,11 +78,15 @@ target_link_libraries(parser_test PRIVATE gtest_main toy_core)
 add_executable(codegen_test test/codegen_test.cpp)
 target_link_libraries(codegen_test PRIVATE gtest_main toy_core)
 
+add_executable(jit_test test/jit_test.cpp)
+target_link_libraries(jit_test PRIVATE gtest_main toy_core)
+
 # Discover tests automatically
 include(GoogleTest)
 gtest_discover_tests(lexer_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(parser_test PROPERTIES NO_PRETTY_VALUES TRUE)
 gtest_discover_tests(codegen_test PROPERTIES NO_PRETTY_VALUES TRUE)
+gtest_discover_tests(jit_test PROPERTIES NO_PRETTY_VALUES TRUE)
 
 # lit + FileCheck tests (end-to-end: feed a .k file to toy, check the printed IR)
 find_program(LIT_TOOL NAMES lit llvm-lit)

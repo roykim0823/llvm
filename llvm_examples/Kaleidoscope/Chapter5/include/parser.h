@@ -5,21 +5,20 @@
 #include <memory>
 
 #include "ast.h"
-#include "ir_gen_ctx.h"
 #include "lexer.h"
 
 namespace toy {
 
 class Parser {
 public:
-    Parser(Lexer& lexer, IRGenContext& ctx) : lexer(lexer), ctx(ctx) {
+    Parser(Lexer& lexer) : lexer(lexer) {
         binopPrecedence['<'] = 10;
         binopPrecedence['+'] = 20;
         binopPrecedence['-'] = 20;
         binopPrecedence['*'] = 40;
     }
 
-    void mainLoop();
+    int getCurToken() const { return curTok; }  // The token the parser is looking at
     int getNextToken();  // Reads another token from the lexer and updates curTok
     int getTokPrecedence();
 
@@ -36,14 +35,8 @@ public:
     std::unique_ptr<FunctionAST> parseTopLevelExpr();  // simple wrapper for top-level-expression
     std::unique_ptr<PrototypeAST> parseExtern();
 
-    // Top-level parsing and JIT driver
-    void handleDefinition();
-    void handleExtern();
-    void handleTopLevelExpression();
-
   private:
     Lexer& lexer;
-    IRGenContext& ctx;
     /// CurTok/getNextToken - Provide a simple token buffer.
     int curTok;  // Current token the parser is looking at
 

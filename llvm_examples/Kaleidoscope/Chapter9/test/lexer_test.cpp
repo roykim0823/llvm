@@ -1,0 +1,148 @@
+#include <gtest/gtest.h>
+#include <fstream>
+#include <cstdio>
+#include <unistd.h>
+#include "lexer.h"
+
+using namespace toy;
+
+// Structure to hold our test parameters
+struct LexerTestCase {
+    std::string input;
+    int expectedToken;
+    std::string expectedIdentifier = "";
+    double expectedNumVal = 0.0;
+};
+
+class LexerParamTest : public ::testing::TestWithParam<LexerTestCase> {
+protected:
+    void SetUp() override {
+        // Create a temporary file to simulate stdin. Suffix with the pid:
+        // gtest_discover_tests registers each case as its own ctest test, so
+        // `ctest -j` runs cases of this binary concurrently in the same
+        // working directory.
+        tmpPath = "_lexer_test_input_" + std::to_string(getpid()) + ".txt";
+        std::ofstream tmpFile(tmpPath);
+        tmpFile << GetParam().input;
+        tmpFile.close();
+
+        // Redirect stdin to our temp file
+        ASSERT_TRUE(freopen(tmpPath.c_str(), "r", stdin) != nullptr);
+    }
+
+    void TearDown() override {
+        // Restore stdin is complex in C++, usually we just let the
+        // OS handle it or refactor to use istreams.
+        // Delete the temporary file after the test finishes
+        std::remove(tmpPath.c_str());
+    }
+
+    std::string tmpPath;
+};
+
+TEST_P(LexerParamTest, ProcessesInputCorrectly) {
+    Lexer lexer;
+    auto params = GetParam();
+
+    int token = lexer.gettok();
+
+    EXPECT_EQ(token, params.expectedToken);
+
+    if (token == tok_identifier) {
+        EXPECT_EQ(lexer.getIdentifierStr(), params.expectedIdentifier);
+    } else if (token == tok_number) {
+        EXPECT_DOUBLE_EQ(lexer.getNumVal(), params.expectedNumVal);
+    }
+}
+
+// Define the test cases
+INSTANTIATE_TEST_SUITE_P(
+    LexerTests,
+    LexerParamTest,
+    ::testing::Values(
+        // Keywords
+        LexerTestCase{"", tok_eof},
+        LexerTestCase{"def", tok_def},
+        LexerTestCase{"extern", tok_extern},
+        LexerTestCase{"if", tok_if},
+        LexerTestCase{"then", tok_then},
+        LexerTestCase{"else", tok_else},
+        LexerTestCase{"for", tok_for},
+        LexerTestCase{"in", tok_in},
+        LexerTestCase{"binary", tok_binary},
+        LexerTestCase{"unary", tok_unary},
+        LexerTestCase{"var", tok_var},  // mutable variable
+
+        // Identifiers
+        LexerTestCase{"myVar", tok_identifier, "myVar"},
+        LexerTestCase{"x123", tok_identifier, "x123"},
+        LexerTestCase{"my_var", tok_identifier, "my"},  // '_' is not isalnum, so it ends the identifier: "my_var" lexes as my, '_', var
+
+        // Numbers
+        LexerTestCase{"42", tok_number, "", 42.0},
+        LexerTestCase{"123.45", tok_number, "", 123.45},
+        LexerTestCase{"0.001", tok_number, "", 0.001},
+        LexerTestCase{"1.234567e+10", tok_number, "", 1.234567},  // the lexer stops at 'e' (not a digit/dot), so strtod never sees the exponent; 'e+10' is lexed as separate tokens
+
+        // Edge cases for numbers
+        LexerTestCase{".5", tok_number, "", 0.5},
+        LexerTestCase{"5.", tok_number, "", 5.0},
+        LexerTestCase{".", '.'},   // lone dot is NOT a number (deviation from upstream, which lexes it as 0.0)
+        LexerTestCase{".x", '.'},  // dot not followed by a digit: returned as ASCII '.', 'x' is left for the next call
+        LexerTestCase{".0123", tok_number, "", 0.0123},
+        LexerTestCase{"3.14.15", tok_number, "", 3.14}, // the lexer consumes all of "3.14.15"; strtod stops at the second dot
+
+
+        // Single characters (ASCII)
+        LexerTestCase{"+", '+'},
+        LexerTestCase{"(", '('},
+        LexerTestCase{"!", '!'},   // operator characters are plain ASCII tokens;
+        LexerTestCase{"@", '@'},   // the parser decides whether they are operators
+        LexerTestCase{">", '>'},
+        LexerTestCase{"|", '|'},
+        LexerTestCase{"&", '&'},
+
+        // Comments and Whitespace (should skip and return next token)
+        LexerTestCase{"# this is a comment\n42", tok_number, "", 42.0},
+        LexerTestCase{"   \t\n  def", tok_def}
+    )
+);
+
+// -----------------------------------------------------------------------------
+// Chapter 9: the lexer tracks where each token starts (1-based line/column).
+class LexerLocationTest : public ::testing::Test {
+protected:
+    void feed(const std::string& input) {
+        tmpPath = "_lexer_loc_input_" + std::to_string(getpid()) + ".txt";
+        std::ofstream(tmpPath) << input;
+        ASSERT_TRUE(freopen(tmpPath.c_str(), "r", stdin) != nullptr);
+    }
+    void TearDown() override { std::remove(tmpPath.c_str()); }
+    std::string tmpPath;
+};
+
+TEST_F(LexerLocationTest, TokensOnOneLine) {
+    feed("def foo(x)");
+    Lexer lexer;
+    EXPECT_EQ(lexer.gettok(), tok_def);
+    EXPECT_EQ(lexer.getTokLoc().Line, 1); EXPECT_EQ(lexer.getTokLoc().Col, 1);
+    EXPECT_EQ(lexer.gettok(), tok_identifier);
+    EXPECT_EQ(lexer.getTokLoc().Col, 5);          // "foo" starts at column 5
+    EXPECT_EQ(lexer.gettok(), '(');
+    EXPECT_EQ(lexer.getTokLoc().Col, 8);
+    EXPECT_EQ(lexer.gettok(), tok_identifier);
+    EXPECT_EQ(lexer.getTokLoc().Col, 9);
+}
+
+TEST_F(LexerLocationTest, NewlinesAdvanceLines) {
+    feed("# a comment\n\n  if x < 3 then");
+    Lexer lexer;
+    EXPECT_EQ(lexer.gettok(), tok_if);
+    EXPECT_EQ(lexer.getTokLoc().Line, 3); EXPECT_EQ(lexer.getTokLoc().Col, 3);
+    EXPECT_EQ(lexer.gettok(), tok_identifier);    // x
+    EXPECT_EQ(lexer.getTokLoc().Col, 6);
+    EXPECT_EQ(lexer.gettok(), '<');
+    EXPECT_EQ(lexer.getTokLoc().Col, 8);
+    EXPECT_EQ(lexer.gettok(), tok_number);        // 3
+    EXPECT_EQ(lexer.getTokLoc().Line, 3); EXPECT_EQ(lexer.getTokLoc().Col, 10);
+}
